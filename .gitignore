@@ -1,0 +1,15 @@
+.tools/
+frontend/wailsjs/
+build/bin/
+build/windows/*.syso
+*.syso
+coverage.out
+*.epub
+*.kepub
+*.kepub.epub
+reports/
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+!testdata/**/*.epub

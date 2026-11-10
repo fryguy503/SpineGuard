@@ -1,0 +1,56 @@
+name: Build and test
+on:
+  push:
+    branches: [main, 'codex/**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: amd64
+          - os: macos-15
+            platform: macos
+            arch: arm64
+          - os: macos-15-intel
+            platform: macos
+            arch: amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache: true
+      - name: Verify dependencies
+        run: go mod verify
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build.ps1
+      - name: Build macOS
+        if: runner.os == 'macOS'
+        run: bash scripts/build-macos.sh
+      - name: Upload native application and CLI
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpineGuard-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            build/bin/*.exe
+            build/bin/*.zip
+            build/bin/spineguard-cli
+          if-no-files-found: error
+          retention-days: 14
