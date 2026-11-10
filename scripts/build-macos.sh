@@ -20,8 +20,8 @@ if [[ "$arch" == universal ]]; then
   done
   lipo -create -output build/bin/spineguard-cli build/bin/spineguard-cli-amd64 build/bin/spineguard-cli-arm64
   rm -f build/bin/spineguard-cli-amd64 build/bin/spineguard-cli-arm64
-  lipo -verify_arch x86_64 arm64 build/bin/SpineGuard.app/Contents/MacOS/SpineGuard
-  lipo -verify_arch x86_64 arm64 build/bin/spineguard-cli
+  lipo build/bin/SpineGuard.app/Contents/MacOS/SpineGuard -verify_arch x86_64 arm64
+  lipo build/bin/spineguard-cli -verify_arch x86_64 arm64
   file build/bin/SpineGuard.app/Contents/MacOS/SpineGuard build/bin/spineguard-cli
 else
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o build/bin/spineguard-cli ./cmd/spineguard-cli

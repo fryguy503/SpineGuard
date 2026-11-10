@@ -9,7 +9,7 @@ Use this checklist for each version and record the exact build, operating system
 - Recognized standard XHTML entities parse offline without source edits; numeric normalization is optional. Unknown/custom entity definitions remain protected.
 - Tested separate copies from a 31-book corpus: all original SHA-256 hashes stayed unchanged. Default selected fixes produced nine test copies; explicit language choices, script cleanup, and entity normalization were exercised separately. Reading-order word counts were preserved.
 - Official EPUBCheck 5.4.0 compared 14 original/copy pairs. No new error kinds were introduced; unrelated pre-existing conformance errors remain visible. Supported repairs made the tested Goodbye, Nemesis Games, and Drive copies pass EPUBCheck.
-- Go tests, `go vet`, and all 21 browser UI tests pass. Windows portable and installer packages built locally. The workflow checks the final revision on Windows, Intel macOS, and Apple Silicon macOS; interactive Mac, signing, and physical-reader acceptance remain separate gates.
+- Go tests, `go vet`, and all 21 browser UI tests pass. Windows portable and installer packages built locally. CI runs Go tests on Windows x64 and Apple Silicon macOS. Universal Mac packages compile both Intel and Apple Silicon slices, verify them with `lipo`, and verify their ad-hoc signatures; this does not establish Intel runtime acceptance. Interactive Mac, signing/notarization, and physical-reader acceptance remain separate gates.
 
 ## 1.1.0 repair expansion evidence
 
@@ -18,7 +18,7 @@ Use this checklist for each version and record the exact build, operating system
 - SHA-256 verification confirmed all 31 original EPUBs were unchanged. Output copies were written only to a separate test directory.
 - Official EPUBCheck 5.4.0 compared three original/copy pairs and found no new error kinds. Existing conformance errors remain; these results do not establish universal EPUB validity or physical-reader acceptance.
 - Go tests and `go vet` pass. All 17 browser UI tests pass, including default script preservation, explicit cleanup selection, preview/source binding, stale reports, and whole-library rescanning.
-- Windows 1.1.0 portable and installer packages built locally. The workflow checks Windows, Intel macOS, and Apple Silicon macOS for each revision. Signing and physical-reader acceptance remain independent gates.
+- Windows 1.1.0 portable and installer packages built locally. That version's native CI builds passed on Windows, Intel macOS, and Apple Silicon macOS. Signing and physical-reader acceptance remain independent gates.
 
 ## Initial 1.0.0 evidence
 
@@ -55,7 +55,7 @@ Use this checklist for each version and record the exact build, operating system
 
 ## Native macOS acceptance
 
-- [ ] Run `bash scripts/build-macos.sh` separately on Apple Silicon and Intel hosts/runners.
+- [ ] Build with `bash scripts/build-macos.sh universal` and verify both Mach-O slices, or record separate native architecture builds. Record the host on which Go tests actually ran.
 - [ ] Verify each `.app`, app ZIP, CLI architecture, and checksum.
 - [ ] Exercise the native application checks listed for Windows, including Command+O and the native menu.
 - [ ] Verify packaged launch and settings persistence on the oldest macOS version claimed for that artifact.
