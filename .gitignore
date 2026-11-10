@@ -2,6 +2,7 @@
 frontend/wailsjs/
 build/bin/
 build/windows/*.syso
+build/windows/installer/tmp/
 *.syso
 coverage.out
 *.epub

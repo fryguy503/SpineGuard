@@ -268,6 +268,25 @@ func TestUnreadableHistoryDoesNotDropPreferences(t *testing.T) {
 	}
 }
 
+func TestEstimatesFollowSavedPreferencesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	s := New(dir)
+	s.store(Report{Report: epub.Report{Path: "book.epub", Stats: epub.Stats{Words: 1001, EstimatedPages: 5, ReadingMinutes: 5}}})
+	s.persist()
+	settings := DefaultSettings()
+	settings.WordsPerPage = 500
+	settings.ReadingWPM = 100
+	if _, err := s.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	for _, service := range []*Service{s, New(dir)} {
+		r := service.State("test").Reports[0]
+		if r.Stats.EstimatedPages != 3 || r.Stats.ReadingMinutes != 11 {
+			t.Fatalf("preferences and exported estimates disagree: %+v", r.Stats)
+		}
+	}
+}
+
 func writeTestFile(t *testing.T, name, text string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(name), 0700); err != nil {

@@ -332,6 +332,10 @@ func Scan(ctx context.Context, filename string, opts Options) (report Report, er
 }
 
 func (a *archive) xmlError(name string, b []byte, err error) {
+	if dtdEntityUnsupported(b, err) {
+		a.issue("XML_DTD_CHECK_INCOMPLETE", "warning", "DTD entity checks require EPUBCheck", "The native XML parser does not expand DTD-defined entities. This document's checks and word statistics may be incomplete. Run EPUBCheck to evaluate validity. "+err.Error(), name, false)
+		return
+	}
 	_, repair := sanitizeXML(b)
 	line := 0
 	if x, ok := err.(*xml.SyntaxError); ok {

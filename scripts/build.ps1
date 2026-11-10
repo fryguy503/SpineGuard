@@ -20,4 +20,5 @@ if ($Installer) { $buildArgs += '-nsis' }
 if ($LASTEXITCODE -ne 0) { throw 'Desktop build failed.' }
 go build -trimpath -ldflags '-s -w' -o build/bin/spineguard-cli.exe ./cmd/spineguard-cli
 if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
+Compress-Archive -LiteralPath @('build/bin/SpineGuard.exe', 'build/bin/spineguard-cli.exe', 'README.md', 'LICENSE') -DestinationPath 'build/bin/SpineGuard-windows-amd64.zip' -Force
 Write-Host 'Built SpineGuard in build/bin.'

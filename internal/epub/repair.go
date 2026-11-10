@@ -19,7 +19,7 @@ import (
 // structure, close tags, remove scripts, fetch DTDs, or interpret custom entities.
 // A candidate is accepted only if the strict XML parser can read the result.
 func sanitizeXML(src []byte) ([]byte, bool) {
-	if _, err := validateXML(src); err == nil {
+	if _, err := validateXML(src); err == nil || dtdEntityUnsupported(src, err) {
 		return src, false
 	}
 	if !utf8.Valid(src) || bytes.Contains(bytes.ToUpper(src), []byte("<!ENTITY")) {
@@ -86,7 +86,11 @@ func sanitizeXML(src []byte) ([]byte, bool) {
 						out.WriteString(entity)
 					} else {
 						decoded := stdhtml.UnescapeString(entity)
-						if decoded == entity {
+						// html.UnescapeString also accepts legacy prefix matches:
+						// &notit; becomes "¬it;" although notit is not an entity.
+						// Complete HTML entity values never retain their terminal
+						// semicolon, except the entity that represents one itself.
+						if decoded == entity || (strings.HasSuffix(decoded, ";") && entity != "&semi;") {
 							return src, false
 						}
 						out.WriteString(decoded)

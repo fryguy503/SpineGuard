@@ -153,8 +153,10 @@ func readLimited(path string, max int64) ([]byte, error) {
 func (s *Service) State(version string) State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	reports:=append([]Report{},s.reports...)
-	for i:=range reports{updateEstimates(&reports[i],s.settings)}
+	reports := append([]Report{}, s.reports...)
+	for i := range reports {
+		updateEstimates(&reports[i], s.settings)
+	}
 	return State{Version: version, Settings: s.settings, Reports: reports, Warning: s.warning}
 }
 

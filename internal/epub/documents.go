@@ -129,6 +129,29 @@ func validateXML(b []byte) (xml.Name, error) {
 	return root, nil
 }
 
+// encoding/xml does not expand declarations from internal or external DTDs.
+// A complete named reference in a document declaring a DTD is therefore an
+// incomplete native assessment; EPUBCheck must decide its validity and meaning.
+func dtdEntityUnsupported(b []byte, parseErr error) bool {
+	x, ok := parseErr.(*xml.SyntaxError)
+	if !ok || !strings.HasPrefix(x.Msg, "invalid character entity &") || !strings.HasSuffix(x.Msg, ";") || strings.HasPrefix(x.Msg, "invalid character entity &#") {
+		return false
+	}
+	d := decoder(b)
+	for {
+		t, err := d.Token()
+		if err != nil {
+			return false
+		}
+		if directive, ok := t.(xml.Directive); ok {
+			text := strings.TrimSpace(string(directive))
+			if strings.HasPrefix(text, "DOCTYPE ") || strings.HasPrefix(text, "DOCTYPE\n") || strings.HasPrefix(text, "DOCTYPE\t") || strings.HasPrefix(text, "DOCTYPE\r") {
+				return true
+			}
+		}
+	}
+}
+
 func resolveReference(base, href string) (target, fragment string, external bool, err error) {
 	u, err := url.Parse(strings.TrimSpace(href))
 	if err != nil {
@@ -214,13 +237,49 @@ func (a *archive) inspectContent(name string, b []byte) contentInfo {
 	// Count tokens before building a DOM. Checking the completed tree alone lets
 	// a small file containing millions of tiny tags allocate excessive memory.
 	tokenizer := html.NewTokenizer(bytes.NewReader(input))
+	var openElements []string
 	for tokens := 0; ; tokens++ {
-		if a.ctx.Err() != nil { return info }
+		if a.ctx.Err() != nil {
+			return info
+		}
 		if tokens >= 200000 {
 			a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "More than 200,000 HTML tokens. This document was not loaded into a DOM; word counts and references may be incomplete.", name, false)
 			return info
 		}
-		if tokenizer.Next() == html.ErrorToken { break }
+		token := tokenizer.Next()
+		if token == html.ErrorToken {
+			break
+		}
+		if token == html.StartTagToken || token == html.SelfClosingTagToken {
+			tagName, moreAttributes := tokenizer.TagName()
+			tag := string(tagName)
+			attributes := 0
+			for moreAttributes {
+				_, _, moreAttributes = tokenizer.TagAttr()
+				attributes++
+				if attributes > 256 {
+					a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "An element has more than 256 attributes. It was not loaded into a DOM; word counts and references may be incomplete.", name, false)
+					return info
+				}
+			}
+			// The HTML parser treats self-closing non-void HTML tags as opens.
+			// Conservatively count those too before allocating its open stack.
+			if !tokenHas("area base br col embed hr img input link meta param source track wbr", tag) {
+				openElements = append(openElements, tag)
+			}
+			if len(openElements) > 1024 {
+				a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "Nesting exceeds the 1,024-level preflight limit. This document was not loaded into a DOM; word counts and references may be incomplete.", name, false)
+				return info
+			}
+		} else if token == html.EndTagToken {
+			tagName, _ := tokenizer.TagName()
+			for i := len(openElements) - 1; i >= 0; i-- {
+				if openElements[i] == string(tagName) {
+					openElements = openElements[:i]
+					break
+				}
+			}
+		}
 	}
 	doc, err := html.Parse(bytes.NewReader(input))
 	if err != nil {

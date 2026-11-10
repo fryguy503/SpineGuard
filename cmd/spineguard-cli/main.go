@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 
 	"github.com/fryguy503/SpineGuard/internal/epub"
 	"github.com/fryguy503/SpineGuard/internal/library"
@@ -87,6 +88,9 @@ func scan(ctx context.Context, args []string) int {
 	}
 	files, err := library.Discover(ctx, flags.Args(), settings.Recursive)
 	if err != nil {
+		if ctx.Err() != nil {
+			return 130
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 2
 	}
@@ -141,7 +145,7 @@ func repair(ctx context.Context, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: spineguard-cli repair -out new-file.epub book.epub")
 		return 2
 	}
-	if filepath.Ext(*out) != ".epub" {
+	if !strings.EqualFold(filepath.Ext(*out), ".epub") {
 		fmt.Fprintln(os.Stderr, "output must have an .epub extension")
 		return 2
 	}

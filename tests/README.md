@@ -1,0 +1,35 @@
+# Frontend smoke tests
+
+These development-only tests serve the actual static frontend on a temporary
+loopback HTTP port and inject a simulated desktop API before the page loads.
+The UI displays its **Preview data** banner. No mock data or test server is
+included in the application build, and no EPUB files are uploaded.
+
+From this directory, with Node.js 20 or newer:
+
+```sh
+npm ci
+npm run install-browser
+npm test
+```
+
+On a Linux CI runner, use `npx playwright install --with-deps chromium` for the
+browser installation step. Browser binaries and npm are not needed to build
+or run the desktop application.
+
+The suite covers importing, native-drop registration, progress and cancellation,
+repairs and unresolved findings, formal-check errors, metadata escaping,
+search/filter, preferences and estimates, exports, error recovery, report
+clearing, keyboard shortcuts, and layout at 980×680 and 1440×1000.
+It checks for JavaScript/console errors and unexpected network requests.
+
+Optional environment variables:
+
+- `SPINEGUARD_BROWSER_EXECUTABLE`: use an existing Chrome/Chromium executable.
+- `SPINEGUARD_PLAYWRIGHT_MODULE`: reuse an existing Playwright package by its
+  absolute package-directory path instead of installing another copy.
+- `SPINEGUARD_UI_SCREENSHOTS`: directory for optional verification screenshots.
+
+These tests exercise the UI contract. Go tests cover the EPUB engine and app
+backend separately; native file dialogs and Wails/platform integration require
+an actual desktop smoke test.

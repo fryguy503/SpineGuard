@@ -172,7 +172,10 @@ func TestXMLSanitation(t *testing.T) {
 		{"control", string([]byte{'<', 'p', '>', 1, 'a', '<', '/', 'p', '>'}), true},
 		{"unclosed", `<p><b>test</p>`, false},
 		{"unknown entity", `<p>&unrecognized;</p>`, false},
+		{"partial entity name", `<p>&notit;</p>`, false},
+		{"semicolon entity", `<p>&semi;</p>`, true},
 		{"custom DTD", `<!DOCTYPE p [<!ENTITY custom "x">]><p>&custom;</p>`, false},
+		{"external DTD preserves meaning", `<!DOCTYPE p SYSTEM "book.dtd"><p>&nbsp;</p>`, false},
 		{"valid CDATA", `<p><![CDATA[A & B]]></p>`, false},
 		{"comment preserved", `<p><!-- A & B -->A & B</p>`, true},
 	} {
@@ -446,5 +449,94 @@ func TestStylesheetReferencesExcludeComments(t *testing.T) {
 	r = scanFixture(t, e)
 	if !hasIssue(r, "LINK_MISSING") {
 		t.Fatal("inline style resource was not checked")
+	}
+}
+
+func TestMalformedXMLRepairHasBoundedAllocations(t *testing.T) {
+	// A long lowercase text run previously caused whole-suffix case conversion
+	// for each character while looking for DOCTYPE, giving quadratic allocation.
+	src := []byte("<p>" + strings.Repeat("lowercase text ", 512) + " & tail</p>")
+	allocations := testing.AllocsPerRun(3, func() {
+		fixed, ok := sanitizeXML(src)
+		if !ok || !bytes.Contains(fixed, []byte(" &amp; tail")) {
+			t.Fatal("large malformed text was not repaired")
+		}
+	})
+	if allocations > 200 {
+		t.Fatalf("repair allocated %.0f times; expected allocations bounded independently of text length", allocations)
+	}
+}
+
+func TestHTMLPreflightRejectsExcessiveNodesAndNesting(t *testing.T) {
+	var attributes strings.Builder
+	for i := 0; i < 257; i++ {
+		fmt.Fprintf(&attributes, `data-extra-%d="x" `, i)
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"tokens", "<html><body>" + strings.Repeat("<br/>", 200001) + "</body></html>"},
+		{"nesting", "<html><body>" + strings.Repeat("<b>", 1025) + "text" + strings.Repeat("</b>", 1025) + "</body></html>"},
+		{"selfclosing", "<html><body>" + strings.Repeat("<span/>", 1025) + "text</body></html>"},
+		{"attributes", "<html><body><span " + attributes.String() + ">text</span></body></html>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Report{Issues: []Issue{}}
+			a := &archive{ctx: context.Background(), report: &r}
+			info := a.inspectContent("OPS/complex.xhtml", []byte(tc.body))
+			if !hasIssue(r, "CONTENT_COMPLEXITY") || info.words != 0 {
+				t.Fatalf("preflight failed to reject content: words=%d issues=%+v", info.words, r.Issues)
+			}
+		})
+	}
+}
+
+func TestDTDEntityAssessmentIsIncompleteAndRepairPreservesSource(t *testing.T) {
+	for _, declaration := range []string{
+		`<!DOCTYPE html [<!ENTITY custom "expanded words">]>`,
+		`<!DOCTYPE html SYSTEM "book.dtd">`,
+	} {
+		e := fixtureEntries()
+		e[3].body = declaration + strings.Replace(e[3].body, `<?xml version="1.0"?>`, "", 1)
+		e[3].body = strings.Replace(e[3].body, "One two three.", "One &custom; three.", 1)
+		chapter := e[3].body
+		input := writeFixture(t, e)
+		r, err := Scan(context.Background(), input, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.Errors != 0 || hasIssue(r, "XML_INVALID") || !hasIssue(r, "XML_DTD_CHECK_INCOMPLETE") {
+			t.Fatalf("DTD limitation overstated as damage: %+v", r.Issues)
+		}
+		for _, issue := range r.Issues {
+			if issue.Code == "XML_DTD_CHECK_INCOMPLETE" && issue.Repairable {
+				t.Fatal("unsupported DTD meaning must not be repaired")
+			}
+		}
+		output := filepath.Join(filepath.Dir(input), "preserved.epub")
+		fixed, err := Repair(context.Background(), input, output, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasIssue(fixed.Report, "XML_DTD_CHECK_INCOMPLETE") {
+			t.Fatal("repair hid incomplete DTD assessment")
+		}
+		var verify Report
+		a, err := openArchive(context.Background(), output, &verify)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(a.text["OPS/chapter.xhtml"]) != chapter {
+			t.Fatal("repair changed DTD-dependent source")
+		}
+		a.z.Close()
+	}
+}
+
+func TestDeclaredDTDDoesNotHideBareAmpersandDamage(t *testing.T) {
+	e := fixtureEntries()
+	e[3].body = `<!DOCTYPE html SYSTEM "book.dtd">` + strings.Replace(e[3].body, `<?xml version="1.0"?>`, "", 1)
+	e[3].body = strings.Replace(e[3].body, "One two three.", "Rock & roll", 1)
+	r := scanFixture(t, e)
+	if !hasIssue(r, "XML_INVALID") || hasIssue(r, "XML_DTD_CHECK_INCOMPLETE") {
+		t.Fatalf("bare ampersand should remain a concrete syntax error: %+v", r.Issues)
 	}
 }

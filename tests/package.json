@@ -1,0 +1,17 @@
+{
+  "name": "spineguard-ui-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Development-only browser tests for the embedded SpineGuard frontend",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 ui-smoke.mjs",
+    "install-browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}
