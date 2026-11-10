@@ -25,7 +25,7 @@ func run(args []string) int {
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-version":
-		fmt.Println("SpineGuard 1.1.0")
+		fmt.Println("SpineGuard 1.2.0")
 		return 0
 	case "help", "--help", "-h":
 		usage()
@@ -62,6 +62,11 @@ Repair options:
   -fix-links             Repair unambiguous broken links (default true)
   -fix-duplicate-ids      Repair safely editable duplicate IDs (default true)
   -remove-scripts        Opt-in reader cleanup; may remove interactivity
+  -fix-metadata          Restore provable metadata references (default true)
+  -language en-US        Fill a missing/invalid book language explicitly
+  -generate-identifier   Explicitly create an identifier when none is usable
+  -fix-document-markup   Fix provable empty-guide/SVG issues (default true)
+  -normalize-entities    Optionally use numeric standard character references
   -expect-sha256 hash    Require the source hash returned by a preview
 
 Exit codes: 0 no errors detected; 1 book errors found; 2 usage/tool failure;
@@ -152,6 +157,11 @@ func repair(ctx context.Context, args []string) int {
 	flags.BoolVar(&choices.FixLinks, "fix-links", true, "repair unambiguous broken links")
 	flags.BoolVar(&choices.FixDuplicateIDs, "fix-duplicate-ids", true, "repair safely editable duplicate identifiers")
 	flags.BoolVar(&choices.RemoveScripts, "remove-scripts", false, "remove scripts and inline scripting; may remove interactivity")
+	flags.BoolVar(&choices.FixMetadata, "fix-metadata", true, "restore provable metadata references")
+	flags.StringVar(&choices.Language, "language", "", "fill missing/invalid language with an explicit language tag")
+	flags.BoolVar(&choices.GenerateIdentifier, "generate-identifier", false, "explicitly create an identifier when no usable value exists")
+	flags.BoolVar(&choices.FixDocumentMarkup, "fix-document-markup", true, "fix provable empty-guide and SVG attribute issues")
+	flags.BoolVar(&choices.NormalizeEntities, "normalize-entities", false, "optionally normalize standard named entities to numeric references")
 	flags.StringVar(&choices.ExpectedSHA256, "expect-sha256", "", "require the source hash returned by preview")
 	if err := flags.Parse(args); err != nil {
 		return 2

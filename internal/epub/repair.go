@@ -123,6 +123,9 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 }
 
 func RepairWithOptions(ctx context.Context, input, output string, opts Options, choices RepairOptions) (result RepairResult, err error) {
+	if err := ValidateRepairOptions(choices); err != nil {
+		return result, err
+	}
 	inputAbs, e := filepath.Abs(input)
 	if e != nil {
 		return result, e
@@ -146,6 +149,7 @@ func RepairWithOptions(ctx context.Context, input, output string, opts Options, 
 	if choices.ExpectedSHA256 != "" && !strings.EqualFold(choices.ExpectedSHA256, before) {
 		return result, errors.New("the EPUB changed after the repair review; review the current file again")
 	}
+	choices.ExpectedSHA256 = before
 	report := Report{Issues: []Issue{}}
 	a, e := openArchive(ctx, inputAbs, &report)
 	if e != nil {

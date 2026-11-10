@@ -79,6 +79,13 @@ const scriptedBook = {
   status:'warning',warnings:1,
   issues:[{code:'CONTENT_SCRIPT',severity:'warning',title:'Scripted content',detail:'This book contains a script.',file:'EPUB/chapter.xhtml',repairable:false}],
 };
+const metadataBook={
+  ...cleanBook,path:'/books/missing-metadata.epub',filename:'missing-metadata.epub',title:'A Book With Missing Metadata',language:'',identifier:'',status:'error',errors:2,
+  issues:[
+    {code:'METADATA_LANGUAGE',severity:'error',title:'Publication language is missing',detail:'A language must be confirmed.',repairable:false,file:'EPUB/package.opf'},
+    {code:'METADATA_IDENTIFIER',severity:'error',title:'Publication identifier is missing',detail:'The identifier cannot be recovered.',repairable:false,file:'EPUB/package.opf'},
+  ],
+};
 const fixtureReports = [cleanBook, warningBook, hostileBook];
 
 before(async () => {
@@ -157,7 +164,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.1.0', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.2.0', settings, reports, warning: config.startupWarning || '' };
       },
       async SelectFiles() {
         invoke('SelectFiles');
@@ -184,16 +191,20 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
       },
       async PreviewRepair(path,options) {
         invoke('PreviewRepair',[path,options]);
+        if(config.invalidLanguage&&options.fixMetadata&&options.language===config.invalidLanguage)throw new Error('Enter a valid BCP 47 language tag, such as en or en-US.');
         harness.previewRunning=true;
         if(config.previewDelay)await new Promise(resolve=>setTimeout(resolve,config.previewDelay));
         harness.previewRunning=false;
         const source=config.previewReports?.[path]||reports.find(report=>report.path===path);
         let actions=config.planActions??(source.issues.some(issue=>issue.repairable&&!issue.optionalRepair&&issue.code!=='CONTENT_SCRIPT')?[{kind:'packaging',file:'mimetype',description:'Normalize EPUB mimetype packaging.',count:1,requiresOptIn:false}]:[]);
-        actions=actions.filter(action=>!(action.kind==='links'&&!options.fixLinks)&&!(action.kind==='duplicate_ids'&&!options.fixDuplicateIds));
+        actions=actions.filter(action=>!(action.kind==='links'&&!options.fixLinks)&&!(action.kind==='duplicate_ids'&&!options.fixDuplicateIds)&&!(action.kind==='metadata'&&!options.fixMetadata)&&!(action.kind==='document_markup'&&!options.fixDocumentMarkup));
+        if(config.missingLanguage&&options.fixMetadata&&options.language)actions=[...actions,{kind:'metadata',file:'EPUB/package.opf',description:`Set the missing language to ${options.language}.`,count:1,requiresOptIn:true}];
+        if(config.missingIdentity&&options.fixMetadata&&options.generateIdentifier)actions=[...actions,{kind:'metadata',file:'EPUB/package.opf',description:'Create a new publication identifier.',count:1,requiresOptIn:true}];
+        if(config.entities&&options.normalizeEntities)actions=[...actions,{kind:'entities',file:'EPUB/chapter.xhtml',description:'Normalize standard HTML entities to numeric references.',count:3,requiresOptIn:true}];
         const hasScripts=source.issues.some(issue=>issue.code==='CONTENT_SCRIPT');
         if(options.removeScripts&&hasScripts)actions=[...actions,{kind:'reader_cleanup',file:'EPUB/chapter.xhtml',description:'Remove scripts and scripted actions.',count:3,requiresOptIn:true}];
-        const unresolved=source.issues.filter(issue=>!(options.removeScripts&&issue.code==='CONTENT_SCRIPT')&&!(issue.repairable&&!issue.optionalRepair&&issue.code!=='CONTENT_SCRIPT'&&actions.length));
-        return {path,sourceSha256:harness.currentSHA,options,actions:config.blockedReason?[]:actions,unresolved,blockedReason:config.blockedReason||'',report:source};
+        const unresolved=source.issues.filter(issue=>!(options.removeScripts&&issue.code==='CONTENT_SCRIPT')&&!(issue.repairable&&!issue.optionalRepair&&issue.code!=='CONTENT_SCRIPT'&&actions.length)&&!(options.fixMetadata&&options.language&&issue.code==='METADATA_LANGUAGE')&&!(options.fixMetadata&&options.generateIdentifier&&issue.code==='METADATA_IDENTIFIER'));
+        return {path,sourceSha256:harness.currentSHA,options,actions:config.blockedReason?[]:actions,unresolved,blockedReason:config.blockedReason||'',suggestions:config.suggestions||{},report:source};
       },
       async RepairBookWithOptions(path,options) {
         invoke('RepairBookWithOptions', [path,options]);
@@ -437,7 +448,7 @@ test('repair review defaults preserve scripts and requires explicit reader clean
   assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
   assert.match(await page.locator('#repair-plan-unresolved').textContent(),/Interactive content may stop working/);
   const initial=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='PreviewRepair'));
-  assert.deepEqual(initial.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false});
+  assert.deepEqual(initial.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false});
   await page.locator('[name=removeScripts]').check();
   await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
   assert.match(await page.locator('#repair-plan-actions').textContent(),/Remove scripts and scripted actions/);
@@ -465,6 +476,109 @@ test('safe repair choices, unfixable findings, and protected-book reasons remain
   await protectedPage.getByText('This copy cannot be repaired automatically',{exact:true}).waitFor();
   assert.match(await protectedPage.locator('#repair-plan-summary').textContent(),/digital signature/);
   assert.equal(await protectedPage.locator('#save-repair-button').isDisabled(),true);
+});
+
+test('detected language stays a suggestion until selected and new identities remain opt-in',async t=>{
+  const page=await openApp(t,{reports:[metadataBook],missingLanguage:true,missingIdentity:true,
+    suggestions:{language:'en',languageSources:['EPUB/title.xhtml','<img src=x onerror="window.__xssExecuted=true">']},
+  });
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByRole('button',{name:'Use detected en',exact:true}).waitFor();
+  assert.equal(await page.locator('#repair-language').inputValue(),'');
+  assert.equal(await page.locator('[name=generateIdentifier]').isChecked(),false);
+  assert.equal(await page.locator('[name=normalizeEntities]').isChecked(),false);
+  assert.equal(await page.locator('[name=fixMetadata]').isChecked(),true);
+  assert.equal(await page.locator('[name=fixDocumentMarkup]').isChecked(),true);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.match(await page.locator('#language-suggestion-source').textContent(),/EPUB\/title.xhtml/);
+  assert.equal(await page.locator('#language-suggestion-source img').count(),0);
+  assert.equal(await page.evaluate(()=>window.__xssExecuted),false);
+  const initial=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='PreviewRepair'));
+  assert.equal(initial.args[1].language,'');
+  await page.getByRole('button',{name:'Use detected en',exact:true}).click();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.equal(await page.locator('#repair-language').inputValue(),'en');
+  assert.match(await page.locator('#repair-plan-actions').textContent(),/missing language to en/);
+  assert.match(await page.locator('#repair-plan-actions').textContent(),/OPTIONAL CHANGE/);
+  assert.doesNotMatch(await page.locator('#repair-plan-actions').textContent(),/READER CLEANUP/);
+  await page.locator('[name=generateIdentifier]').check();
+  await page.getByText('Create a new publication identifier.',{exact:true}).waitFor();
+  await screenshot(page,'repair-metadata-review');
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
+  await page.locator('#result-dialog').waitFor({state:'visible'});
+  const saved=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='RepairBookWithOptions'));
+  assert.deepEqual(saved.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'en',generateIdentifier:true,fixDocumentMarkup:true,normalizeEntities:false,expectedSha256:'a'.repeat(64)});
+});
+
+test('language typing invalidates the previous plan immediately and debounces previews',async t=>{
+  const page=await openApp(t,{reports:[metadataBook],missingLanguage:true,
+    planActions:[{kind:'document_markup',file:'EPUB/package.opf',description:'Remove an empty optional guide.',count:1}],
+  });
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  const initialCount=await callCount(page,'PreviewRepair');
+  await page.locator('#repair-language').pressSequentially('en-US',{delay:20});
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.equal(await callCount(page,'PreviewRepair'),initialCount,'Typing should not start a native preview on every key');
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.equal(await callCount(page,'PreviewRepair'),initialCount+1);
+  const latest=await page.evaluate(()=>window.__testHarness.calls.filter(c=>c.name==='PreviewRepair').at(-1));
+  assert.equal(latest.args[1].language,'en-US');
+  const pending=await openApp(t,{reports:[metadataBook],missingLanguage:true,previewDelay:150,
+    planActions:[{kind:'document_markup',file:'EPUB/package.opf',description:'Remove an empty optional guide.',count:1}],
+  });
+  await pending.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await pending.locator('#repair-language').fill('fr');
+  await pending.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  const pendingCalls=await pending.evaluate(()=>window.__testHarness.calls.filter(c=>c.name==='PreviewRepair'));
+  assert.equal(pendingCalls.length,2,'A pending old preview must wait for the debounced latest value');
+  assert.equal(pendingCalls.at(-1).args[1].language,'fr');
+});
+
+test('invalid language feedback remains editable and disabling metadata gates its choices',async t=>{
+  const page=await openApp(t,{reports:[metadataBook],missingLanguage:true,missingIdentity:true,invalidLanguage:'not a language',suggestions:{language:'en',languageSources:['EPUB/title.xhtml']}});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByRole('button',{name:'Use detected en',exact:true}).waitFor();
+  await page.locator('#repair-language').fill('not a language');
+  await page.getByRole('alert').filter({hasText:'valid BCP 47 language tag'}).waitFor();
+  assert.equal(await page.locator('#repair-language').isEditable(),true);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  await page.locator('#repair-language').fill('en');
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  await page.locator('[name=generateIdentifier]').check();
+  await page.getByText('Create a new publication identifier.',{exact:true}).waitFor();
+  await page.locator('[name=fixMetadata]').uncheck();
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+  assert.equal(await page.locator('#repair-language').isDisabled(),true);
+  assert.equal(await page.locator('[name=generateIdentifier]').isDisabled(),true);
+  assert.equal(await page.locator('#use-detected-language').isDisabled(),true);
+  const latest=await page.evaluate(()=>window.__testHarness.calls.filter(c=>c.name==='PreviewRepair').at(-1));
+  assert.equal(latest.args[1].fixMetadata,false);
+  assert.equal(latest.args[1].language,'en');
+  assert.equal(latest.args[1].generateIdentifier,true,'The disabled choice is retained but gated by fixMetadata');
+});
+
+test('document markup is selected by default while valid-entity normalization requires a choice',async t=>{
+  const page=await openApp(t,{reports:[warningBook],entities:true,
+    planActions:[{kind:'document_markup',file:'EPUB/package.opf',description:'Remove an empty optional guide.',count:1}],
+  });
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByText('Remove an empty optional guide.',{exact:true}).waitFor();
+  assert.equal(await page.locator('[name=fixDocumentMarkup]').isChecked(),true);
+  assert.equal(await page.locator('[name=normalizeEntities]').isChecked(),false);
+  assert.doesNotMatch(await page.locator('#repair-plan-actions').textContent(),/Normalize standard HTML entities/);
+  await page.locator('[name=normalizeEntities]').check();
+  await page.getByText('Normalize standard HTML entities to numeric references.',{exact:true}).waitFor();
+  assert.match(await page.locator('#repair-plan-actions').textContent(),/OPTIONAL CHANGE/);
+  await page.locator('[name=fixDocumentMarkup]').uncheck();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.doesNotMatch(await page.locator('#repair-plan-actions').textContent(),/empty optional guide/);
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
+  await page.locator('#result-dialog').waitFor({state:'visible'});
+  const saved=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='RepairBookWithOptions'));
+  assert.equal(saved.args[1].fixDocumentMarkup,false);
+  assert.equal(saved.args[1].normalizeEntities,true);
+  assert.equal(saved.args[1].expectedSha256,'a'.repeat(64));
 });
 
 test('fresh review updates stale findings and preserves healthy-book repair explanation',async t=>{

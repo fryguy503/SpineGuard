@@ -92,7 +92,7 @@ func TestValidEPUB2NCX(t *testing.T) {
 	e[2].body = strings.Replace(e[2].body, `version="3.0"`, `version="2.0"`, 1)
 	e[2].body = strings.Replace(e[2].body, `<spine>`, `<spine toc="ncx">`, 1)
 	e[2].body = strings.Replace(e[2].body, `</manifest>`, `<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/></manifest>`, 1)
-	e = append(e, fixtureEntry{"OPS/toc.ncx", `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head/><docTitle><text>Test</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>`, zip.Deflate})
+	e = append(e, fixtureEntry{"OPS/toc.ncx", `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="urn:uuid:test"/></head><docTitle><text>Test</text></docTitle><navMap><navPoint id="n1" playOrder="1"><navLabel><text>Chapter</text></navLabel><content src="chapter.xhtml"/></navPoint></navMap></ncx>`, zip.Deflate})
 	r := scanFixture(t, e)
 	if r.Errors != 0 {
 		t.Fatalf("EPUB2 errors: %+v", r.Issues)

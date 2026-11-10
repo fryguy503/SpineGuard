@@ -4,17 +4,21 @@
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.1.0**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.2.0**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
 1. Open **SpineGuard**. On Windows, run `SpineGuard.exe`; on macOS, open `SpineGuard.app` from the package for your processor.
 2. Choose **Add EPUBs**, choose a folder, or drop EPUB files onto the window. EPUB 2, EPUB 3, `.kepub`, and `.kepub.epub` files are accepted. Subfolder scanning is configurable.
 3. Select a book to see its statistics and findings. Search and status filters help review a batch. Cancel stops the current operation while retaining completed scan results.
-4. Choose **Review repairs** to see proposed changes and findings that need manual attention. Link repair and eligible duplicate-identifier repairs are selected by default. Optional **Remove scripts** reader cleanup starts unchecked because it can remove interactivity. After reviewing the selected changes, save to a new filename; SpineGuard checks the copy again and keeps the original.
+4. Choose **Review repairs** to see proposed changes and findings that need manual attention. Proven links/resource paths, eligible duplicate identifiers, recoverable metadata, and small markup corrections are selected by default. Optional script removal, new identifier generation, and standard-entity normalization start unchecked. After reviewing the selected changes, save to a new filename; SpineGuard checks the copy again and keeps the original.
 5. Export **JSON** for complete reports or **CSV** for a book/statistics summary. **Clear reports** removes SpineGuard's history without deleting books or repaired copies.
 
 Use **Rescan library** after upgrading to refresh saved findings and statistics. Version 1.1.0 corrects false duplicate-identifier warnings from HTML tree reconstruction and zero word counts caused by self-closing XHTML script elements. These corrections do not require modifying the book.
+
+Version 1.2.0 adds language-tag checks, recovery of existing publication-identifier references, NCX identifier consistency, manifest-backed stylesheet and cover-path fixes, precise identifier dependency checks, empty-guide detection, SVG alignment checks, and offline support for standard character entities in recognized XHTML DTDs. Standard `&mdash;` and `&nbsp;` uses in those documents no longer require a book rewrite to pass the native check. Unknown/custom DTDs still require EPUBCheck.
+
+For a missing or invalid language, enter a language tag such as `en` or use a detected-language suggestion after reviewing its source. Suggestions are not applied automatically. Existing publication identifiers are preserved when their package reference can be restored; generating a new identifier requires explicit selection and is blocked when protection prevents safe editing.
 
 Use **Preferences** to choose a theme, words per estimated page, reading speed, subfolder scanning, and optional EPUBCheck settings. Keyboard shortcuts: **Ctrl/Command+O** adds books, **/** searches, and **Esc** closes a dialog.
 
@@ -67,10 +71,14 @@ spineguard-cli repair -out book.repaired.epub book.epub
 spineguard-cli repair -dry-run book.epub
 spineguard-cli repair -dry-run -remove-scripts book.epub
 spineguard-cli repair -remove-scripts -out reader-copy.epub book.epub
+spineguard-cli repair -dry-run -language en book.epub
+spineguard-cli repair -language en -out language-fixed.epub book.epub
+spineguard-cli repair -generate-identifier -out identified.epub book.epub
+spineguard-cli repair -normalize-entities -out normalized.epub book.epub
 spineguard-cli version
 ```
 
-`scan` supports `-format text|json|csv`, `-recursive`, `-words-per-page` (100–1,000), `-reading-wpm` (80–1,000), `-epubcheck`, and `-java`. `repair` prints its change list and new scan report as JSON and uses default reading estimates. `-dry-run` prints a repair plan without writing a book. `-fix-links=false` and `-fix-duplicate-ids=false` disable those repair categories. `-remove-scripts` explicitly selects reader cleanup. `-expect-sha256 HASH` requires the source hash from a preview, rejecting a changed source file. Scan the repaired file with `-epubcheck` if you also want standards validation. The CLI does not modify the desktop's saved history or preferences.
+`scan` supports `-format text|json|csv`, `-recursive`, `-words-per-page` (100–1,000), `-reading-wpm` (80–1,000), `-epubcheck`, and `-java`. `repair` prints its change list and new scan report as JSON and uses default reading estimates. `-dry-run` prints a repair plan without writing a book. `-fix-links=false`, `-fix-duplicate-ids=false`, `-fix-metadata=false`, and `-fix-document-markup=false` disable those categories. `-language TAG` supplies a confirmed language; `-generate-identifier`, `-normalize-entities`, and `-remove-scripts` explicitly select optional changes. `-expect-sha256 HASH` requires the source hash from a preview, rejecting a changed source file. Scan the repaired file with `-epubcheck` if you also want standards validation. The CLI does not modify the desktop's saved history or preferences.
 
 Exit codes: **0** no errors detected, **1** book errors found, **2** usage/tool failure, **130** interrupted. Warnings alone do not produce exit code 1. Shell redirection creates or replaces the specified report file.
 

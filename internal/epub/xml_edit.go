@@ -39,6 +39,7 @@ func parseEditableXML(ctx context.Context, src []byte) ([]xmlElementSpan, error)
 	}
 	// A declared legacy encoding cannot safely receive newly encoded UTF-8 text.
 	d := xml.NewDecoder(bytes.NewReader(src))
+	d.Entity = recognizedDoctypeEntities(src)
 	var elements []xmlElementSpan
 	var stack []int
 	roots := 0

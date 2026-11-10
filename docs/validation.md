@@ -1,6 +1,6 @@
 # Validation and repair behavior
 
-SpineGuard 1.1.0 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.2.0 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
 
@@ -19,7 +19,7 @@ The checker never opens a book as an interactive web page, executes its scripts,
 
 CSS reference checks use a limited parser; they do not validate the complete CSS grammar or reproduce a reading system's layout. Image decoding covers Go's JPEG, PNG, and GIF decoders. Unrecognized image formats produce an advisory rather than proof that an image is corrupt. Pixel decoding is limited to supported images at most 16 MiB and within the dimension advisory limits. SVG receives XML/reference checks, not a rendered-image comparison.
 
-The native engine does not implement every EPUB schema, namespace constraint, HTML/CSS rule, media codec, script behavior, accessibility rule, or fallback-chain requirement. Custom DTD entities are not resolved; external DTDs are not fetched. A declared-DTD entity that prevents native XML parsing produces an incomplete-check warning and is preserved during repair. Use EPUBCheck when a standards-conformance decision matters.
+The native engine does not implement every EPUB schema, namespace constraint, HTML/CSS rule, media codec, script behavior, accessibility rule, or fallback-chain requirement. Recognized standard XHTML DTD declarations can use the built-in HTML4 character-entity table without a network fetch. Internal/custom declarations do not enable that table. A remaining DTD entity that prevents native parsing produces an incomplete-check warning and is preserved. Use EPUBCheck when a standards-conformance decision matters.
 
 ## Reading statistics
 
@@ -68,12 +68,15 @@ Supported actions are:
 
 1. Rebuild ZIP packaging with exact `application/epub+zip` identification first, uncompressed, with no mimetype extra fields.
 2. In otherwise reparsable UTF-8 XML, escape bare ampersands, replace recognized HTML named entities with their Unicode equivalents, and remove invalid control characters. A changed document is accepted only when it passes the native XML parser.
-3. Correct a broken internal resource path when exactly one proven replacement exists, including a unique matching fragment destination or an unambiguous case-only path correction. Ambiguous or absent destinations stay unresolved.
-4. Repair eligible duplicate source identifiers conservatively. Styling, scripting, and ambiguous reference dependencies can prevent automatic editing; the review explains the remaining issue.
+3. Correct a broken internal resource path when exactly one proven replacement exists: a unique fragment destination, unambiguous case correction, or a matching existing manifest resource with a compatible role/media type. Explicit cover-role images can use a uniquely identified package cover image. Ambiguous or absent destinations stay unresolved; no missing payloads are invented.
+4. Repair duplicate source identifiers when dependency analysis proves the later occurrences can be renamed. The first destination and existing navigation remain intact. CSS ID dependencies, scripts, forms/ARIA/SMIL references, unavailable styles, or syntax that cannot be analyzed can prevent editing. Class selectors alone do not block all identifier repairs.
 5. When explicitly selected, remove script elements and inline scripting from a reader copy. This can remove interactive behavior. JavaScript resource files and other archive resources are retained; they are not silently deleted.
-6. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings. Content edits use source-byte patches instead of whole-document HTML serialization.
+6. Restore a unique existing publication identifier's reference without changing its value. For a uniquely declared EPUB 2 NCX, synchronize its `dtb:uid` metadata with the verified package identifier, preserving navigation points and play order. A missing/invalid language is filled only from an explicit user value. New identifier generation requires selection and is bound to the reviewed source; valid identifiers remain unchanged.
+7. Remove a truly empty optional OPF guide, and canonicalize a provable case-only SVG alignment value. Other structure and geometry are preserved.
+8. Optionally normalize recognized standard named character entities to numeric references in text and attributes. Comments, CDATA, processing instructions, and the DOCTYPE remain unchanged. Unknown/custom entity definitions are preserved.
+9. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings. Content edits use source-byte patches instead of whole-document HTML serialization.
 
-SpineGuard does not invent missing metadata, package declarations, navigation, or resource contents. It does not close broken tags, reconstruct truncated compressed data, simplify CSS, resize images, or convert EPUB to KEPUB. Scripts remain unless reader cleanup is selected. A successful repair may leave content or conformance errors to resolve.
+SpineGuard does not guess a language, reconstruct missing content, or invent chapter navigation. New publication identity requires an explicit choice. It does not close broken tags, reconstruct truncated compressed data, simplify CSS, resize images, or convert EPUB to KEPUB. Scripts remain unless reader cleanup is selected. A successful repair may leave content or conformance errors to resolve.
 
 Version 1.1.0 reads well-formed XHTML as XML for statistics and identifiers. Valid self-closing script tags no longer hide the following book text, and HTML parser reconstruction no longer creates spurious duplicate-identifier warnings. Rescan saved reports after upgrading; these scanner corrections require no EPUB edits.
 

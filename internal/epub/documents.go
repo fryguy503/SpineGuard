@@ -84,8 +84,10 @@ func utf8Input(b []byte) []byte {
 	return bytes.TrimPrefix(b, []byte{0xef, 0xbb, 0xbf})
 }
 func decoder(b []byte) *xml.Decoder {
-	d := xml.NewDecoder(bytes.NewReader(utf8Input(b)))
+	input := utf8Input(b)
+	d := xml.NewDecoder(bytes.NewReader(input))
 	d.CharsetReader = charset.NewReaderLabel
+	d.Entity = recognizedDoctypeEntities(input)
 	return d
 }
 

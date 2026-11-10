@@ -125,6 +125,25 @@ func collectRepairEdits(ctx context.Context, a *archive, choices RepairOptions) 
 		}
 	}
 	files := map[string]bool{}
+	metadataChoices := choices
+	if a.obfuscated {
+		metadataChoices.FixMetadata = false
+		metadataChoices.GenerateIdentifier = false
+		metadataChoices.Language = ""
+	}
+	metadataModified, metadataActions, metadataNotes := planMetadataDocuments(ctx, working, metadataChoices)
+	for name, b := range metadataModified {
+		if editable(name) {
+			working[name] = b
+			modified[name] = b
+		}
+	}
+	for _, action := range metadataActions {
+		if editable(action.File) {
+			actions = append(actions, action)
+		}
+	}
+	notes = append(notes, metadataNotes...)
 	for name, f := range a.files {
 		if !f.FileInfo().IsDir() {
 			files[name] = true
@@ -190,7 +209,7 @@ func annotateRepairIssues(a *archive, report *Report) {
 	}
 	wanted := false
 	for _, i := range report.Issues {
-		if i.Code == "LINK_MISSING" || i.Code == "LINK_FRAGMENT" || i.Code == "CONTENT_SCRIPT" || i.Code == "CONTENT_DUPLICATE_ID" || i.Code == "CONTENT_EVENT_HANDLER" || i.Code == "CONTENT_JAVASCRIPT_URL" {
+		if i.Code == "LINK_MISSING" || i.Code == "LINK_FRAGMENT" || i.Code == "CONTENT_SCRIPT" || i.Code == "CONTENT_DUPLICATE_ID" || i.Code == "CONTENT_EVENT_HANDLER" || i.Code == "CONTENT_JAVASCRIPT_URL" || strings.HasPrefix(i.Code, "METADATA_") || i.Code == "NCX_IDENTIFIER_MISMATCH" || i.Code == "OPF_GUIDE_EMPTY" || i.Code == "SVG_PRESERVE_ASPECT_RATIO" {
 			wanted = true
 			break
 		}
@@ -220,6 +239,10 @@ func annotateRepairIssues(a *archive, report *Report) {
 			issue.RepairReason = note.RepairReason
 			issue.OptionalRepair = note.OptionalRepair
 		}
+		if a.obfuscated && (issue.RepairKind == "metadata" || issue.Code == "NCX_IDENTIFIER_MISMATCH" || packages[issue.File] || issue.File == "META-INF/encryption.xml" || strings.HasSuffix(strings.ToLower(issue.File), ".opf")) {
+			issue.Repairable = false
+			issue.RepairReason = "Metadata edits are disabled for this font-obfuscated book to preserve identifier consistency and font keys. Review this metadata together with its fonts."
+		}
 	}
 }
 
@@ -232,9 +255,17 @@ func defaultRepairReason(code string) string {
 	case code == "XML_DTD_CHECK_INCOMPLETE":
 		return "Run EPUBCheck to assess DTD-dependent XML. Custom entities are preserved."
 	case code == "METADATA_LANGUAGE":
-		return "Set the book's correct language in a metadata editor; SpineGuard does not guess it."
+		return "Enter the book's language in Review repairs. A detected language can be suggested, but is not applied without your selection."
+	case code == "METADATA_LANGUAGE_INVALID":
+		return "Enter a valid language tag in Review repairs, such as en or en-US."
 	case code == "METADATA_IDENTIFIER":
-		return "Restore the publication's identifier and package reference. A guessed identifier could break obfuscated fonts."
+		return "Restore a unique existing identifier/reference when possible, or explicitly generate an identifier when none exists and font protection permits it."
+	case code == "NCX_IDENTIFIER_MISMATCH":
+		return "Synchronize the declared NCX identifier with the verified package identifier while preserving the publication's identity."
+	case code == "OPF_GUIDE_EMPTY":
+		return "A truly empty optional guide container can be removed without changing the reading order."
+	case code == "SVG_PRESERVE_ASPECT_RATIO":
+		return "A unique case-only match to a standard SVG alignment value can be normalized; other geometry is preserved."
 	case strings.HasPrefix(code, "NAV_") || strings.HasPrefix(code, "NCX_"):
 		return "Navigation needs a verified table of contents; SpineGuard does not invent chapter destinations."
 	case code == "CONTENT_DUPLICATE_ID":
@@ -254,6 +285,9 @@ func defaultRepairReason(code string) string {
 
 func PlanRepair(ctx context.Context, input string, opts Options, choices RepairOptions) (plan RepairPlan, err error) {
 	plan = RepairPlan{Path: input, Options: choices, Actions: []RepairAction{}, Unresolved: []Issue{}}
+	if err := ValidateRepairOptions(choices); err != nil {
+		return plan, err
+	}
 	if abs, e := filepath.Abs(input); e == nil {
 		plan.Path = abs
 	}
@@ -265,6 +299,7 @@ func PlanRepair(ctx context.Context, input string, opts Options, choices RepairO
 	if choices.ExpectedSHA256 != "" && !strings.EqualFold(choices.ExpectedSHA256, before) {
 		return plan, errors.New("the EPUB changed after the repair review; review the current file again")
 	}
+	choices.ExpectedSHA256 = before
 	report, err := Scan(ctx, input, opts)
 	if err != nil {
 		return plan, err
@@ -279,6 +314,7 @@ func PlanRepair(ctx context.Context, input string, opts Options, choices RepairO
 	}
 	defer a.z.Close()
 	loadDeclaredRepairText(a)
+	plan.Suggestions = repairSuggestions(a.text)
 	a.inspectProtection()
 	if plan.BlockedReason = repairBlockedReason(a); plan.BlockedReason != "" {
 		plan.Unresolved = append(plan.Unresolved, report.Issues...)

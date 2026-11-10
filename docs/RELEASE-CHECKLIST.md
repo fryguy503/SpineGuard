@@ -2,6 +2,15 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.2.0 additional checks and repairs
+
+- Added confirmed-language input and source-language suggestions, existing identifier/reference recovery, explicit missing-identifier generation, and package/NCX identifier consistency.
+- Added manifest-backed resource and cover-path correction, bounded per-ID CSS dependency checks, empty OPF guide checks, and SVG alignment validation/canonicalization.
+- Recognized standard XHTML entities parse offline without source edits; numeric normalization is optional. Unknown/custom entity definitions remain protected.
+- Tested separate copies from a 31-book corpus: all original SHA-256 hashes stayed unchanged. Default selected fixes produced nine test copies; explicit language choices, script cleanup, and entity normalization were exercised separately. Reading-order word counts were preserved.
+- Official EPUBCheck 5.4.0 compared 14 original/copy pairs. No new error kinds were introduced; unrelated pre-existing conformance errors remain visible. Supported repairs made the tested Goodbye, Nemesis Games, and Drive copies pass EPUBCheck.
+- Go tests, `go vet`, and all 21 browser UI tests pass. Windows portable and installer packages built locally. The workflow checks the final revision on Windows, Intel macOS, and Apple Silicon macOS; interactive Mac, signing, and physical-reader acceptance remain separate gates.
+
 ## 1.1.0 repair expansion evidence
 
 - Source-based XHTML parsing replaces HTML tree reconstruction for word counts and identifiers. A read-only rescan of 31 local EPUBs reduced duplicate-identifier warnings from 1,379 to 5 and corrected a zero-word report to 10,564 words.

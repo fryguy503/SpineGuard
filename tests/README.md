@@ -19,6 +19,9 @@ or run the desktop application.
 
 The suite covers importing, native-drop registration, progress and cancellation,
 repair previews and unresolved findings, explicit script-cleanup selection,
+metadata recovery defaults, language suggestions that require selection,
+debounced language entry and validation feedback, gated identifier generation,
+document-markup choices and optional entity normalization,
 source-hash binding and refresh after source changes, pending-option changes,
 formal-check errors, metadata escaping,
 search/filter, preferences and estimates, exports, error recovery, report

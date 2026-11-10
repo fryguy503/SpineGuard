@@ -24,10 +24,12 @@ type linkRepairIndex struct {
 	files     map[string]bool
 	folded    map[string][]string
 	complete  bool
+	resources repairResourceCatalog
 }
 
 func buildLinkRepairIndex(ctx context.Context, text map[string][]byte, files map[string]bool) linkRepairIndex {
 	index := linkRepairIndex{documents: map[string]repairDocument{}, anchors: map[string][]anchorDestination{}, files: files, folded: map[string][]string{}, complete: true}
+	index.resources = buildRepairResourceCatalog(ctx, text, files)
 	declared, known := declaredRepairContent(text)
 	if !known {
 		index.complete = false
@@ -128,7 +130,7 @@ func sortedTextNames(text map[string][]byte) []string {
 	return names
 }
 
-func (index linkRepairIndex) destination(name, href string, navigation bool) (replacement, code, detail, reason string) {
+func (index linkRepairIndex) destination(name, href string, navigation bool, kind string, coverRole bool) (replacement, code, detail, reason string) {
 	target, fragment, external, err := resolveReference(name, href)
 	if err != nil || external {
 		return "", "", "", ""
@@ -153,13 +155,23 @@ func (index linkRepairIndex) destination(name, href string, navigation bool) (re
 	} else {
 		code, detail = "LINK_MISSING", href+" resolves to "+target
 	}
-	if matches := index.folded[strings.ToLower(target)]; !exists && len(matches) == 1 && strings.EqualFold(matches[0], target) {
+	if matches := index.folded[strings.ToLower(target)]; !exists && len(matches) == 1 && strings.EqualFold(matches[0], target) && resourceMediaCompatible(kind, index.resources.media[matches[0]]) {
 		candidate := matches[0]
 		if fragment == "" {
 			return relativeResourceURL(name, candidate, href), code, detail, "Correct the resource filename's case to the single matching archive entry."
 		}
 		if doc, ok := index.documents[candidate]; ok && doc.anchors[fragment] == 1 {
 			return relativeResourceURL(name, candidate, href), code, detail, "Correct filename case; the destination contains one matching anchor."
+		}
+	}
+	if !exists {
+		if candidate, why := index.resources.replacement(target, kind, coverRole); candidate != "" {
+			if fragment == "" {
+				return relativeResourceURL(name, candidate, href), code, detail, why
+			}
+			if doc, ok := index.documents[candidate]; ok && doc.anchors[fragment] == 1 {
+				return relativeResourceURL(name, candidate, href), code, detail, why + " The destination contains the requested anchor."
+			}
 		}
 	}
 	if fragment == "" {
@@ -221,17 +233,35 @@ func planLinkDocuments(ctx context.Context, text map[string][]byte, files map[st
 		}
 		var edits []xmlEdit
 		var fileNotes []Issue
-		for _, el := range doc.elements {
+		baseUnknown := hasRepairBase(doc.elements)
+		for elementIndex, el := range doc.elements {
 			for _, attr := range el.Attributes {
 				if attr.Local != "href" && attr.Local != "src" && attr.Local != "poster" && !(attr.Local == "data" && el.Name.Local == "object") {
 					continue
 				}
 				navigation := (attr.Local == "href" && (el.Name.Local == "a" || el.Name.Local == "area")) || (el.Name.Local == "content" && attr.Local == "src")
-				replacement, code, detail, reason := index.destination(name, attr.Value, navigation)
+				kind := referenceResourceKind(el, attr)
+				replacement, code, detail, reason := index.destination(name, attr.Value, navigation, kind, isExplicitCoverImage(doc.elements, elementIndex))
 				if code == "" {
 					continue
 				}
 				note := Issue{Code: code, File: name, Detail: detail, Repairable: replacement != "", RepairKind: "links", RepairReason: reason}
+				if kind == "" || !referenceNamespaceSupported(doc.elements, elementIndex, attr) {
+					replacement = ""
+					note.Repairable = false
+					note.RepairReason = "This reference's namespace or resource role cannot be proven compatible with a replacement."
+				}
+				if baseUnknown {
+					replacement = ""
+					note.Repairable = false
+					note.RepairReason = "This document declares a base URI. Its references need base-aware review before paths can be changed."
+				}
+				if code == "LINK_MISSING" && el.Name.Local == "script" && cleanupExecutableNamespace(el.Name.Space) && replacement == "" && !baseUnknown {
+					note.Repairable = true
+					note.OptionalRepair = true
+					note.RepairKind = "reader_cleanup"
+					note.RepairReason = "The script file is absent. Optional Remove scripts cleanup removes this referencing script element and its missing-resource finding; it does not recreate the script."
+				}
 				fileNotes = append(fileNotes, note)
 				if choices.FixLinks && replacement != "" && replacement != attr.Value {
 					edits = append(edits, xmlEdit{attr.Start, attr.End, escapeXMLAttribute(replacement, attr.Quote)})
