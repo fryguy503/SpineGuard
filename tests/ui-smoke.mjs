@@ -74,6 +74,11 @@ const formalFailure = {
     line: 8, repairable: false,
   }],
 };
+const scriptedBook = {
+  ...cleanBook,path:'/books/scripted.epub',filename:'scripted.epub',title:'A Scripted Book',
+  status:'warning',warnings:1,
+  issues:[{code:'CONTENT_SCRIPT',severity:'warning',title:'Scripted content',detail:'This book contains a script.',file:'EPUB/chapter.xhtml',repairable:false}],
+};
 const fixtureReports = [cleanBook, warningBook, hostileBook];
 
 before(async () => {
@@ -138,6 +143,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     const handlers = {};
     const harness = window.__testHarness = {
       calls: [], handlers, reports, settings, scanTimer: null, resolveScan: null,
+      currentSHA:config.sourceSHA||'a'.repeat(64),mutatedSource:false,
     };
     window.__xssExecuted = false;
     const invoke = (name, args = []) => {
@@ -151,7 +157,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.0.0', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.1.0', settings, reports, warning: config.startupWarning || '' };
       },
       async SelectFiles() {
         invoke('SelectFiles');
@@ -160,6 +166,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
       async SelectFolder() { invoke('SelectFolder'); return config.selectedFolder ?? '/books'; },
       async ScanPaths(paths) {
         invoke('ScanPaths', [paths]);
+        if(harness.previewRunning)throw new Error('A repair preview is still running.');
         handlers['scan:progress']?.({ path: paths[0], index: 0, total: 1 });
         return new Promise(resolve => {
           harness.resolveScan = resolve;
@@ -175,16 +182,32 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
         clearTimeout(harness.scanTimer);
         harness.resolveScan?.([]);
       },
-      async RepairBook(path) {
-        invoke('RepairBook', [path]);
+      async PreviewRepair(path,options) {
+        invoke('PreviewRepair',[path,options]);
+        harness.previewRunning=true;
+        if(config.previewDelay)await new Promise(resolve=>setTimeout(resolve,config.previewDelay));
+        harness.previewRunning=false;
+        const source=config.previewReports?.[path]||reports.find(report=>report.path===path);
+        let actions=config.planActions??(source.issues.some(issue=>issue.repairable&&!issue.optionalRepair&&issue.code!=='CONTENT_SCRIPT')?[{kind:'packaging',file:'mimetype',description:'Normalize EPUB mimetype packaging.',count:1,requiresOptIn:false}]:[]);
+        actions=actions.filter(action=>!(action.kind==='links'&&!options.fixLinks)&&!(action.kind==='duplicate_ids'&&!options.fixDuplicateIds));
+        const hasScripts=source.issues.some(issue=>issue.code==='CONTENT_SCRIPT');
+        if(options.removeScripts&&hasScripts)actions=[...actions,{kind:'reader_cleanup',file:'EPUB/chapter.xhtml',description:'Remove scripts and scripted actions.',count:3,requiresOptIn:true}];
+        const unresolved=source.issues.filter(issue=>!(options.removeScripts&&issue.code==='CONTENT_SCRIPT')&&!(issue.repairable&&!issue.optionalRepair&&issue.code!=='CONTENT_SCRIPT'&&actions.length));
+        return {path,sourceSha256:harness.currentSHA,options,actions:config.blockedReason?[]:actions,unresolved,blockedReason:config.blockedReason||'',report:source};
+      },
+      async RepairBookWithOptions(path,options) {
+        invoke('RepairBookWithOptions', [path,options]);
+        if(config.mutateSourceOnSave&&!harness.mutatedSource){harness.currentSHA='b'.repeat(64);harness.mutatedSource=true;}
+        if(options.expectedSha256!==harness.currentSHA)throw new Error('The book changed since this review. Refresh the repair review.');
         if (config.cancelRepair) return { outputPath: '', changes: [], report: {} };
-        const source = reports.find(report => report.path === path);
+        const source = config.previewReports?.[path]||reports.find(report => report.path === path);
         const outputPath = path.replace(/\.epub$/, '.repaired.epub');
+        const remaining=source.issues.filter(issue=>issue.severity==='warning'&&!issue.repairable&&!(options.removeScripts&&issue.code==='CONTENT_SCRIPT'));
         return {
           outputPath, changes: ['Normalized EPUB mimetype packaging.', 'Preserved all publication resources.'],
           report: {
             ...source, path: outputPath, filename: outputPath.split('/').pop(),
-            errors: 0, warnings: 1, infos: 0, issues: [source.issues[1]],
+            status:remaining.length?'warning':'healthy',errors:0,warnings:remaining.length,infos:0,issues:remaining,
           },
         };
       },
@@ -217,6 +240,13 @@ async function waitForCount(page, count) {
 
 async function callCount(page, name) {
   return page.evaluate(name => window.__testHarness.calls.filter(call => call.name === name).length, name);
+}
+
+async function reviewAndSave(page){
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.locator('#save-repair-button').waitFor({state:'visible'});
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
 }
 
 async function assertFits(page) {
@@ -281,13 +311,13 @@ test('library filters, search, source-page distinction, and hostile metadata esc
   assert.equal(await page.locator('.issue-list script, .issue-list img, .issue-list b').count(), 0);
   assert.equal(await page.locator('.book-detail .book-cover img').count(), 0, 'SVG cover data must not render');
   assert.equal(await page.evaluate(() => window.__xssExecuted), false);
-  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(), true);
+  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(), false,'Saved findings should allow a fresh repair review');
 });
 
 test('repairs preserve the original row and display unresolved findings in the new copy', async t => {
   const page = await openApp(t);
   await page.getByRole('button', { name: 'View Where the Light Goes', exact: true }).click();
-  await page.getByRole('button', { name: 'Repair a copy', exact: true }).click();
+  await reviewAndSave(page);
   await page.locator('#result-dialog').waitFor({ state: 'visible' });
   await waitForCount(page, 4);
   const result = await page.locator('#repair-result').textContent();
@@ -300,7 +330,7 @@ test('repairs preserve the original row and display unresolved findings in the n
   assert.equal(reveal.args[0], '/books/where-the-light-goes.repaired.epub');
   await page.getByRole('button', { name: 'Back to library', exact: true }).click();
   assert.match(await page.locator('.issue-list').textContent(), /demanding for some readers/);
-  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(), true);
+  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(), false,'Unresolved findings still have reviewable reasons');
 });
 
 test('preferences update estimates/theme; EPUBCheck browsing, both exports, and report clearing work', async t => {
@@ -350,7 +380,7 @@ test('in-flight cancellation retains existing results and restores controls', as
 test('scan and repair failures remain reviewable and controls recover', async t => {
   const page = await openApp(t, { failures: {
     ScanPaths: 'The selected file could not be read.',
-    RepairBook: 'This protected book cannot be safely repaired.',
+    RepairBookWithOptions: 'This protected book cannot be safely repaired.',
   } });
   await page.getByRole('button', { name: 'Add EPUBs', exact: false }).click();
   await page.getByRole('alert').filter({ hasText: 'The selected file could not be read.' }).waitFor();
@@ -358,10 +388,11 @@ test('scan and repair failures remain reviewable and controls recover', async t 
   assert.equal(await page.locator('#add-button').isDisabled(), false);
   await waitForCount(page, 3);
   await page.getByRole('button', { name: 'View Where the Light Goes', exact: true }).click();
-  await page.getByRole('button', { name: 'Repair a copy', exact: true }).click();
+  await reviewAndSave(page);
   await page.getByRole('alert').filter({ hasText: 'cannot be safely repaired' }).waitFor();
   assert.equal(await page.locator('#result-dialog').isVisible(), false);
-  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(), false);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(), true);
+  assert.equal(await page.locator('#refresh-repair-preview').isDisabled(), false);
   await waitForCount(page, 3);
 });
 
@@ -373,9 +404,11 @@ test('cancelled native dialogs are quiet and warning messages are escaped', asyn
   await page.getByRole('button', { name: 'Add EPUBs', exact: false }).click();
   assert.equal(await callCount(page, 'ScanPaths'), 0);
   await page.getByRole('button', { name: 'View Where the Light Goes', exact: true }).click();
-  await page.getByRole('button', { name: 'Repair a copy', exact: true }).click();
-  await page.waitForFunction(() => window.__testHarness.calls.some(call => call.name === 'RepairBook'));
+  await reviewAndSave(page);
+  await page.waitForFunction(() => window.__testHarness.calls.some(call => call.name === 'RepairBookWithOptions'));
   assert.equal(await page.locator('#result-dialog').isVisible(), false);
+  assert.equal(await page.locator('#repair-review-dialog').isVisible(), true);
+  await page.getByRole('button',{name:'Close repair review',exact:true}).click();
   await page.getByRole('button', { name: 'Export reports', exact: true }).click();
   await page.locator('[data-export=json]').click();
   assert.doesNotMatch(await page.locator('#toast-stack').textContent(), /Saved JSON/);
@@ -394,6 +427,139 @@ test('formal EPUBCheck errors are clearly attributed and never appear as a healt
   assert.match(await page.locator('.epubcheck-result').textContent(), /EPUBCheck.*failed.*5\.4\.0/);
   assert.match(await page.locator('.issue-list').textContent(), /EPUBCheck: Invalid content/);
   assert.match(await page.locator('.issue-file').textContent(), /chapter\.xhtml:8/);
+});
+
+test('repair review defaults preserve scripts and requires explicit reader cleanup',async t=>{
+  const page=await openApp(t,{reports:[scriptedBook]});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+  assert.equal(await page.locator('[name=removeScripts]').isChecked(),false);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.match(await page.locator('#repair-plan-unresolved').textContent(),/Interactive content may stop working/);
+  const initial=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='PreviewRepair'));
+  assert.deepEqual(initial.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false});
+  await page.locator('[name=removeScripts]').check();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.match(await page.locator('#repair-plan-actions').textContent(),/Remove scripts and scripted actions/);
+  assert.match(await page.locator('#repair-plan-actions').textContent(),/READER CLEANUP/);
+  await screenshot(page,'repair-review-cleanup');
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
+  await page.locator('#result-dialog').waitFor({state:'visible'});
+  const saved=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='RepairBookWithOptions'));
+  assert.equal(saved.args[1].removeScripts,true);
+  assert.equal(saved.args[1].expectedSha256,'a'.repeat(64));
+  await waitForCount(page,2);
+});
+
+test('safe repair choices, unfixable findings, and protected-book reasons remain reviewable',async t=>{
+  const page=await openApp(t,{reports:[formalFailure]});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.match(await page.locator('#repair-plan-summary').textContent(),/Preview predictions cover built-in checks.*EPUBCheck is run again/);
+  assert.match(await page.locator('#repair-plan-unresolved').textContent(),/formal standards validation error/);
+  assert.equal(await callCount(page,'RepairBookWithOptions'),0);
+  await page.getByRole('button',{name:'Close repair review',exact:true}).click();
+  const protectedPage=await openApp(t,{reports:[warningBook],blockedReason:'This book has a digital signature; repackaging would invalidate it.'});
+  await protectedPage.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await protectedPage.getByText('This copy cannot be repaired automatically',{exact:true}).waitFor();
+  assert.match(await protectedPage.locator('#repair-plan-summary').textContent(),/digital signature/);
+  assert.equal(await protectedPage.locator('#save-repair-button').isDisabled(),true);
+});
+
+test('fresh review updates stale findings and preserves healthy-book repair explanation',async t=>{
+  const corrected={...warningBook,status:'healthy',warnings:0,infos:0,issues:[]};
+  const page=await openApp(t,{reports:[warningBook],previewReports:{[warningBook.path]:corrected}});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+  assert.equal(await page.locator('#healthy-books').textContent(),'1');
+  await page.getByRole('button',{name:'Close repair review',exact:true}).click();
+  assert.equal(await page.locator('[data-detail-action=repair]').isDisabled(),true);
+  assert.equal(await page.locator('[data-detail-action=repair]').getAttribute('title'),'No repairs needed: no findings were detected');
+});
+
+test('option changes invalidate pending plans and only the latest selection can be saved',async t=>{
+  const page=await openApp(t,{reports:[scriptedBook],previewDelay:120,
+    planActions:[{kind:'links',file:'EPUB/toc.xhtml',description:'Correct a link to its unique existing anchor.',count:1,requiresOptIn:false}],
+  });
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  await page.locator('[name=removeScripts]').check();
+  await page.locator('[name=removeScripts]').uncheck();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.doesNotMatch(await page.locator('#repair-plan-actions').textContent(),/Remove scripts/);
+  const previews=await page.evaluate(()=>window.__testHarness.calls.filter(c=>c.name==='PreviewRepair'));
+  assert.equal(previews.at(-1).args[1].removeScripts,false);
+  await page.locator('[name=fixLinks]').uncheck();
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+});
+
+test('changed source files require a refreshed review before another save',async t=>{
+  const page=await openApp(t,{reports:[warningBook],mutateSourceOnSave:true});
+  await reviewAndSave(page);
+  await page.getByRole('alert').filter({hasText:'book changed since this review'}).waitFor();
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.equal(await page.locator('#result-dialog').isVisible(),false);
+  await page.getByRole('button',{name:'Refresh review',exact:true}).click();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
+  await page.locator('#result-dialog').waitFor({state:'visible'});
+  const calls=await page.evaluate(()=>window.__testHarness.calls.filter(c=>c.name==='RepairBookWithOptions'));
+  assert.equal(calls[0].args[1].expectedSha256,'a'.repeat(64));
+  assert.equal(calls[1].args[1].expectedSha256,'b'.repeat(64));
+});
+
+test('preview failures recover and repair proposal metadata remains escaped',async t=>{
+  const failed=await openApp(t,{reports:[warningBook],failures:{PreviewRepair:'The book is no longer at its saved path.'}});
+  await failed.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await failed.getByRole('alert').filter({hasText:'no longer at its saved path'}).waitFor();
+  assert.equal(await failed.locator('#save-repair-button').isDisabled(),true);
+  assert.equal(await failed.locator('#refresh-repair-preview').isDisabled(),false);
+  const page=await openApp(t,{reports:[warningBook],planActions:[{kind:'links',file:'<script>alert(1)</script>',description:'<img src=x onerror="window.__xssExecuted=true">',count:1}]});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.equal(await page.locator('#repair-plan-actions img, #repair-plan-actions script').count(),0);
+  assert.equal(await page.evaluate(()=>window.__xssExecuted),false);
+});
+
+test('rescan library sends every saved path and is disabled while scanning or empty',async t=>{
+  const page=await openApp(t,{scanDelay:30000});
+  await page.getByRole('button',{name:'Rescan library',exact:true}).click();
+  await page.locator('#scan-progress').waitFor({state:'visible'});
+  const scan=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='ScanPaths'));
+  assert.deepEqual(scan.args[0],fixtureReports.map(r=>r.path));
+  assert.equal(await page.locator('#rescan-library-button').isDisabled(),true);
+  await page.getByRole('button',{name:'Cancel scan',exact:true}).click();
+  await page.locator('#scan-progress').waitFor({state:'hidden'});
+  assert.equal(await page.locator('#rescan-library-button').isDisabled(),false);
+  const empty=await openApp(t,{reports:[]});
+  assert.equal(await empty.locator('#rescan-library-button').isDisabled(),true);
+});
+
+test('repair review fits a compact desktop and closing a pending review cannot apply changes',async t=>{
+  const page=await openApp(t,{reports:[scriptedBook],previewDelay:150},{width:980,height:680});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByRole('button',{name:'Close repair review',exact:true}).click();
+  await page.evaluate(()=>window.__testHarness.drop(0,0,['/books/queued.epub']));
+  await waitForCount(page,2);
+  assert.equal(await page.locator('#repair-review-dialog').isVisible(),false);
+  assert.equal(await callCount(page,'RepairBookWithOptions'),0);
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await page.getByText('No selected automatic changes are available',{exact:true}).waitFor();
+  await page.locator('[name=removeScripts]').check();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  for(const theme of ['dark','light']){
+    await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+    const bounds=await page.locator('#repair-review-dialog').evaluate(el=>{
+      const dialog=el.getBoundingClientRect(),footer=el.querySelector('.modal-footer').getBoundingClientRect();
+      return {left:dialog.left,right:dialog.right,top:dialog.top,bottom:dialog.bottom,footer:footer.bottom,width:innerWidth,height:innerHeight};
+    });
+    assert.ok(bounds.left>=0&&bounds.right<=bounds.width&&bounds.top>=0&&bounds.bottom<=bounds.height);
+    assert.ok(bounds.footer<=bounds.height,'Save controls must stay within the viewport');
+    assert.equal(await page.locator('#save-repair-button').isVisible(),true);
+    await screenshot(page,`repair-review-980-${theme}`);
+  }
 });
 
 test('layout fits the minimum and standard desktop window in both themes', async t => {

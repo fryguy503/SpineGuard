@@ -71,6 +71,11 @@ type RepairResult struct {
 	Report     Report   `json:"report"`
 }
 
+type RepairPlan struct {
+	epub.RepairPlan
+	Report Report `json:"report"`
+}
+
 type State struct {
 	Version  string   `json:"version"`
 	Settings Settings `json:"settings"`
@@ -443,12 +448,37 @@ func (s *Service) Scan(parent context.Context, paths []string, progress func(Pro
 }
 
 func (s *Service) Repair(parent context.Context, input, output string) (RepairResult, error) {
+	return s.RepairWithOptions(parent, input, output, epub.DefaultRepairOptions())
+}
+
+func (s *Service) PreviewRepair(parent context.Context, input string, choices epub.RepairOptions) (RepairPlan, error) {
+	ctx, settings, err := s.begin(parent)
+	if err != nil {
+		return RepairPlan{}, err
+	}
+	defer s.finish()
+	plan, err := epub.PlanRepair(ctx, input, epub.Options{WordsPerPage: settings.WordsPerPage, ReadingWPM: settings.ReadingWPM}, choices)
+	if err != nil {
+		return RepairPlan{}, err
+	}
+	report := Report{Report: plan.Report}
+	if settings.RunEPUBCheck {
+		report = CheckFile(ctx, input, settings)
+	}
+	if ctx.Err() != nil {
+		return RepairPlan{}, ctx.Err()
+	}
+	s.store(report)
+	return RepairPlan{RepairPlan: plan, Report: report}, nil
+}
+
+func (s *Service) RepairWithOptions(parent context.Context, input, output string, choices epub.RepairOptions) (RepairResult, error) {
 	ctx, settings, err := s.begin(parent)
 	if err != nil {
 		return RepairResult{}, err
 	}
 	defer s.finish()
-	r, err := epub.Repair(ctx, input, output, epub.Options{WordsPerPage: settings.WordsPerPage, ReadingWPM: settings.ReadingWPM})
+	r, err := epub.RepairWithOptions(ctx, input, output, epub.Options{WordsPerPage: settings.WordsPerPage, ReadingWPM: settings.ReadingWPM}, choices)
 	if err != nil {
 		return RepairResult{}, err
 	}

@@ -475,7 +475,7 @@ func TestHTMLPreflightRejectsExcessiveNodesAndNesting(t *testing.T) {
 	for _, tc := range []struct{ name, body string }{
 		{"tokens", "<html><body>" + strings.Repeat("<br/>", 200001) + "</body></html>"},
 		{"nesting", "<html><body>" + strings.Repeat("<b>", 1025) + "text" + strings.Repeat("</b>", 1025) + "</body></html>"},
-		{"selfclosing", "<html><body>" + strings.Repeat("<span/>", 1025) + "text</body></html>"},
+		{"selfclosing-token-limit", "<html><body>" + strings.Repeat("<span/>", 200001) + "text</body></html>"},
 		{"attributes", "<html><body><span " + attributes.String() + ">text</span></body></html>"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

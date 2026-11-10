@@ -119,6 +119,10 @@ func sanitizeXML(src []byte) ([]byte, bool) {
 // Repair writes a new EPUB. Existing destinations are never overwritten; unknown
 // encryption, signatures, unreadable payloads and ambiguous paths are refused.
 func Repair(ctx context.Context, input, output string, opts Options) (result RepairResult, err error) {
+	return RepairWithOptions(ctx, input, output, opts, DefaultRepairOptions())
+}
+
+func RepairWithOptions(ctx context.Context, input, output string, opts Options, choices RepairOptions) (result RepairResult, err error) {
 	inputAbs, e := filepath.Abs(input)
 	if e != nil {
 		return result, e
@@ -135,12 +139,20 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 	} else if !errors.Is(e, os.ErrNotExist) {
 		return result, e
 	}
+	before, e := sourceDigest(ctx, inputAbs)
+	if e != nil {
+		return result, e
+	}
+	if choices.ExpectedSHA256 != "" && !strings.EqualFold(choices.ExpectedSHA256, before) {
+		return result, errors.New("the EPUB changed after the repair review; review the current file again")
+	}
 	report := Report{Issues: []Issue{}}
 	a, e := openArchive(ctx, inputAbs, &report)
 	if e != nil {
 		return result, fmt.Errorf("cannot repair archive: %w", e)
 	}
 	defer a.z.Close()
+	loadDeclaredRepairText(a)
 	a.inspectProtection()
 	if a.unsafe {
 		return result, errors.New("archive integrity or safety checks failed; repair cannot recover missing or corrupt payloads")
@@ -152,31 +164,9 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 		return result, errors.New("required container.xml is missing; its contents cannot be safely invented")
 	}
 	changes := []string{"Rebuilt EPUB ZIP packaging: exact mimetype first, uncompressed, without extra fields."}
-	modified := map[string][]byte{}
-	packages := map[string]bool{}
-	var container struct {
-		Rootfiles []struct {
-			FullPath string `xml:"full-path,attr"`
-		} `xml:"rootfiles>rootfile"`
-	}
-	if b := a.text["META-INF/container.xml"]; len(b) > 0 {
-		if decoder(b).Decode(&container) == nil {
-			for _, r := range container.Rootfiles {
-				packages[r.FullPath] = true
-			}
-		}
-	}
-	for name, b := range a.text {
-		if name == "mimetype" || strings.HasSuffix(strings.ToLower(name), ".css") {
-			continue
-		}
-		if a.obfuscated && (packages[name] || strings.HasSuffix(strings.ToLower(name), ".opf") || name == "META-INF/encryption.xml") {
-			continue
-		}
-		if fixed, ok := sanitizeXML(b); ok {
-			modified[name] = fixed
-			changes = append(changes, "Normalized malformed XML entities or invalid control characters in "+name+".")
-		}
+	modified, actions, _ := collectRepairEdits(ctx, a, choices)
+	for _, action := range actions {
+		changes = append(changes, action.File+": "+action.Description)
 	}
 	sort.Strings(changes[1:])
 	if err = ctx.Err(); err != nil {
@@ -188,55 +178,7 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	z := zip.NewWriter(tmp)
-	fatal := func(e error) (RepairResult, error) { z.Close(); tmp.Close(); return RepairResult{}, e }
-	h := &zip.FileHeader{Name: "mimetype", Method: zip.Store}
-	h.SetMode(0644)
-	w, e := z.CreateHeader(h)
-	if e != nil {
-		return fatal(e)
-	}
-	if _, e = w.Write([]byte("application/epub+zip")); e != nil {
-		return fatal(e)
-	}
-	for _, f := range a.z.File {
-		if e = ctx.Err(); e != nil {
-			return fatal(e)
-		}
-		if f.Name == "mimetype" {
-			continue
-		}
-		header := f.FileHeader
-		// Raw copy keeps original compressed payloads byte-for-byte unless a
-		// documented XML repair was applied. No resources are silently deleted.
-		if b, ok := modified[f.Name]; ok {
-			header.CRC32 = 0
-			header.CompressedSize = 0
-			header.CompressedSize64 = 0
-			header.UncompressedSize = 0
-			header.UncompressedSize64 = 0
-			writer, er := z.CreateHeader(&header)
-			if er != nil {
-				return fatal(er)
-			}
-			if _, er = writer.Write(b); er != nil {
-				return fatal(er)
-			}
-		} else {
-			reader, er := f.OpenRaw()
-			if er != nil {
-				return fatal(er)
-			}
-			writer, er := z.CreateRaw(&header)
-			if er != nil {
-				return fatal(er)
-			}
-			if _, er = io.Copy(writer, contextReader{ctx, reader}); er != nil {
-				return fatal(er)
-			}
-		}
-	}
-	if e = z.Close(); e != nil {
+	if e = writeRepairArchive(ctx, a, tmp, modified); e != nil {
 		tmp.Close()
 		return result, e
 	}
@@ -260,6 +202,13 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 	}
 	if e = ctx.Err(); e != nil {
 		return result, e
+	}
+	after, e := sourceDigest(ctx, inputAbs)
+	if e != nil {
+		return result, e
+	}
+	if before != after {
+		return result, errors.New("the original EPUB changed during repair; the proposed copy was discarded")
 	}
 	// A hard link publishes the completed file atomically with exclusive-create
 	// semantics. If unavailable, an exclusive destination and rollback preserve
@@ -297,4 +246,69 @@ func Repair(ctx context.Context, input, output string, opts Options) (result Rep
 	verified.Filename = filepath.Base(outputAbs)
 	result = RepairResult{OutputPath: outputAbs, Changes: changes, Report: verified}
 	return result, nil
+}
+
+func writeRepairArchive(ctx context.Context, a *archive, destination io.Writer, modified map[string][]byte) error {
+	z := zip.NewWriter(destination)
+	fail := func(err error) error { z.Close(); return err }
+	h := &zip.FileHeader{Name: "mimetype", Method: zip.Store}
+	h.SetMode(0644)
+	w, err := z.CreateHeader(h)
+	if err != nil {
+		return fail(err)
+	}
+	if _, err = w.Write([]byte("application/epub+zip")); err != nil {
+		return fail(err)
+	}
+	for _, f := range a.z.File {
+		if err = ctx.Err(); err != nil {
+			return fail(err)
+		}
+		if f.Name == "mimetype" {
+			continue
+		}
+		header := f.FileHeader
+		if f.FileInfo().IsDir() {
+			if f.UncompressedSize64 != 0 {
+				return fail(fmt.Errorf("directory entry %q contains data and cannot be safely normalized", f.Name))
+			}
+			header.Method = zip.Store
+			header.CRC32 = 0
+			header.CompressedSize = 0
+			header.CompressedSize64 = 0
+			header.UncompressedSize = 0
+			header.UncompressedSize64 = 0
+			if _, e := z.CreateHeader(&header); e != nil {
+				return fail(fmt.Errorf("preserve directory %q: %w", f.Name, e))
+			}
+			continue
+		}
+		if b, ok := modified[f.Name]; ok {
+			header.CRC32 = 0
+			header.CompressedSize = 0
+			header.CompressedSize64 = 0
+			header.UncompressedSize = 0
+			header.UncompressedSize64 = 0
+			writer, e := z.CreateHeader(&header)
+			if e != nil {
+				return fail(fmt.Errorf("create edited entry %q: %w", f.Name, e))
+			}
+			if _, e = writer.Write(b); e != nil {
+				return fail(fmt.Errorf("write edited entry %q: %w", f.Name, e))
+			}
+		} else {
+			reader, e := f.OpenRaw()
+			if e != nil {
+				return fail(fmt.Errorf("read unchanged entry %q: %w", f.Name, e))
+			}
+			writer, e := z.CreateRaw(&header)
+			if e != nil {
+				return fail(fmt.Errorf("create unchanged entry %q: %w", f.Name, e))
+			}
+			if _, e = io.Copy(writer, contextReader{ctx, reader}); e != nil {
+				return fail(fmt.Errorf("preserve unchanged entry %q: %w", f.Name, e))
+			}
+		}
+	}
+	return z.Close()
 }

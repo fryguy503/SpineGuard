@@ -53,13 +53,16 @@ type Stats struct {
 }
 
 type Issue struct {
-	Code       string `json:"code"`
-	Severity   string `json:"severity"`
-	Title      string `json:"title"`
-	Detail     string `json:"detail"`
-	File       string `json:"file,omitempty"`
-	Line       int    `json:"line,omitempty"`
-	Repairable bool   `json:"repairable"`
+	Code           string `json:"code"`
+	Severity       string `json:"severity"`
+	Title          string `json:"title"`
+	Detail         string `json:"detail"`
+	File           string `json:"file,omitempty"`
+	Line           int    `json:"line,omitempty"`
+	Repairable     bool   `json:"repairable"`
+	RepairKind     string `json:"repairKind,omitempty"`
+	RepairReason   string `json:"repairReason,omitempty"`
+	OptionalRepair bool   `json:"optionalRepair,omitempty"`
 }
 
 type RepairResult struct {

@@ -2,6 +2,15 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.1.0 repair expansion evidence
+
+- Source-based XHTML parsing replaces HTML tree reconstruction for word counts and identifiers. A read-only rescan of 31 local EPUBs reduced duplicate-identifier warnings from 1,379 to 5 and corrected a zero-word report to 10,564 words.
+- Test copies repaired two uniquely identifiable broken links in one book, while retaining the third unresolved link. Optional cleanup removed nine script elements across two books and preserved their word counts.
+- SHA-256 verification confirmed all 31 original EPUBs were unchanged. Output copies were written only to a separate test directory.
+- Official EPUBCheck 5.4.0 compared three original/copy pairs and found no new error kinds. Existing conformance errors remain; these results do not establish universal EPUB validity or physical-reader acceptance.
+- Go tests and `go vet` pass. All 17 browser UI tests pass, including default script preservation, explicit cleanup selection, preview/source binding, stale reports, and whole-library rescanning.
+- Windows 1.1.0 portable and installer packages built locally. The workflow checks Windows, Intel macOS, and Apple Silicon macOS for each revision. Signing and physical-reader acceptance remain independent gates.
+
 ## Initial 1.0.0 evidence
 
 | Area | Evidence currently established |

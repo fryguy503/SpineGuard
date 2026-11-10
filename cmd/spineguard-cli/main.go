@@ -25,7 +25,7 @@ func run(args []string) int {
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-version":
-		fmt.Println("SpineGuard 1.0.0")
+		fmt.Println("SpineGuard 1.1.0")
 		return 0
 	case "help", "--help", "-h":
 		usage()
@@ -45,6 +45,8 @@ func usage() {
 
   spineguard-cli scan [options] book.epub [folder ...]
   spineguard-cli repair -out book.repaired.epub book.epub
+  spineguard-cli repair -dry-run book.epub
+  spineguard-cli repair -remove-scripts -out reader-copy.epub book.epub
   spineguard-cli version
 
 Scan options:
@@ -54,6 +56,13 @@ Scan options:
   -reading-wpm 250       Estimate reading time
   -epubcheck path        Optional epubcheck.jar (Java required)
   -java java             Java executable name or full path
+
+Repair options:
+  -dry-run               Preview selected repairs without writing a book
+  -fix-links             Repair unambiguous broken links (default true)
+  -fix-duplicate-ids      Repair safely editable duplicate IDs (default true)
+  -remove-scripts        Opt-in reader cleanup; may remove interactivity
+  -expect-sha256 hash    Require the source hash returned by a preview
 
 Exit codes: 0 no errors detected; 1 book errors found; 2 usage/tool failure;
 130 canceled. Warnings do not cause exit 1. Built-in checks are not full
@@ -138,18 +147,44 @@ func scan(ctx context.Context, args []string) int {
 func repair(ctx context.Context, args []string) int {
 	flags := flag.NewFlagSet("repair", flag.ContinueOnError)
 	out := flags.String("out", "", "new repaired EPUB path")
+	dryRun := flags.Bool("dry-run", false, "preview selected repairs without writing a book")
+	choices := epub.DefaultRepairOptions()
+	flags.BoolVar(&choices.FixLinks, "fix-links", true, "repair unambiguous broken links")
+	flags.BoolVar(&choices.FixDuplicateIDs, "fix-duplicate-ids", true, "repair safely editable duplicate identifiers")
+	flags.BoolVar(&choices.RemoveScripts, "remove-scripts", false, "remove scripts and inline scripting; may remove interactivity")
+	flags.StringVar(&choices.ExpectedSHA256, "expect-sha256", "", "require the source hash returned by preview")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 || *out == "" {
+	if flags.NArg() != 1 || (!*dryRun && *out == "") {
 		fmt.Fprintln(os.Stderr, "usage: spineguard-cli repair -out new-file.epub book.epub")
 		return 2
+	}
+	if *dryRun {
+		plan, err := epub.PlanRepair(ctx, flags.Arg(0), epub.Options{WordsPerPage: 250, ReadingWPM: 250}, choices)
+		if ctx.Err() != nil {
+			return 130
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(plan); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 2
+		}
+		if plan.BlockedReason != "" {
+			return 1
+		}
+		return 0
 	}
 	if !strings.EqualFold(filepath.Ext(*out), ".epub") {
 		fmt.Fprintln(os.Stderr, "output must have an .epub extension")
 		return 2
 	}
-	r, err := epub.Repair(ctx, flags.Arg(0), *out, epub.Options{WordsPerPage: 250, ReadingWPM: 250})
+	r, err := epub.RepairWithOptions(ctx, flags.Arg(0), *out, epub.Options{WordsPerPage: 250, ReadingWPM: 250}, choices)
 	if ctx.Err() != nil {
 		return 130
 	}

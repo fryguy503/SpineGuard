@@ -1,6 +1,6 @@
 # Validation and repair behavior
 
-SpineGuard 1.0.0 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.1.0 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
 
@@ -62,13 +62,20 @@ Scan-limit findings mean the book was not completely analyzed. Splitting an unus
 
 Repair always writes a separate new `.epub`. An existing destination is never overwritten, including when a native save dialog offers to replace it. The source book is not modified.
 
+The repair review lists selected actions, affected files, and unresolved findings. Changing an option refreshes the preview. The desktop binds the saved copy to the reviewed source hash and refuses a source that changed after review.
+
 Supported actions are:
 
 1. Rebuild ZIP packaging with exact `application/epub+zip` identification first, uncompressed, with no mimetype extra fields.
 2. In otherwise reparsable UTF-8 XML, escape bare ampersands, replace recognized HTML named entities with their Unicode equivalents, and remove invalid control characters. A changed document is accepted only when it passes the native XML parser.
-3. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings.
+3. Correct a broken internal resource path when exactly one proven replacement exists, including a unique matching fragment destination or an unambiguous case-only path correction. Ambiguous or absent destinations stay unresolved.
+4. Repair eligible duplicate source identifiers conservatively. Styling, scripting, and ambiguous reference dependencies can prevent automatic editing; the review explains the remaining issue.
+5. When explicitly selected, remove script elements and inline scripting from a reader copy. This can remove interactive behavior. JavaScript resource files and other archive resources are retained; they are not silently deleted.
+6. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings. Content edits use source-byte patches instead of whole-document HTML serialization.
 
-SpineGuard does not invent missing metadata, package declarations, navigation, or resource contents. It does not close broken tags, reconstruct truncated compressed data, remove scripts, simplify CSS, resize images, or convert EPUB to KEPUB. A successful packaging repair may leave content or conformance errors to resolve.
+SpineGuard does not invent missing metadata, package declarations, navigation, or resource contents. It does not close broken tags, reconstruct truncated compressed data, simplify CSS, resize images, or convert EPUB to KEPUB. Scripts remain unless reader cleanup is selected. A successful repair may leave content or conformance errors to resolve.
+
+Version 1.1.0 reads well-formed XHTML as XML for statistics and identifiers. Valid self-closing script tags no longer hide the following book text, and HTML parser reconstruction no longer creates spurious duplicate-identifier warnings. Rescan saved reports after upgrading; these scanner corrections require no EPUB edits.
 
 Repair is refused for failed archive-integrity/safety checks, missing `container.xml`, unknown encryption, or digital signatures. DRM is not removed. Recognized IDPF/Adobe font obfuscation is preserved; its package and encryption documents are left intact so the publication identifier and font relationship remain unchanged. XML with custom entity declarations is not automatically rewritten.
 

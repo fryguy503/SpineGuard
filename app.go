@@ -11,11 +11,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/fryguy503/SpineGuard/internal/epub"
 	"github.com/fryguy503/SpineGuard/internal/library"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 type App struct {
 	ctx       context.Context
@@ -74,6 +75,29 @@ func (a *App) ScanPaths(paths []string) ([]library.Report, error) {
 func (a *App) CancelScan() { a.service.Cancel() }
 
 func (a *App) RepairBook(input string) (library.RepairResult, error) {
+	return a.repairBook(input, epub.DefaultRepairOptions())
+}
+
+func (a *App) PreviewRepair(input string, choices epub.RepairOptions) (library.RepairPlan, error) {
+	if !a.operation.TryLock() {
+		return library.RepairPlan{}, errors.New("a scan or repair is already running")
+	}
+	defer a.operation.Unlock()
+	plan, err := a.service.PreviewRepair(a.ctx, input, choices)
+	if warning := a.GetState().Warning; warning != "" {
+		wruntime.EventsEmit(a.ctx, "app:warning", warning)
+	}
+	return plan, err
+}
+
+func (a *App) RepairBookWithOptions(input string, choices epub.RepairOptions) (library.RepairResult, error) {
+	if choices.ExpectedSHA256 == "" {
+		return library.RepairResult{}, errors.New("review repairs before saving a repaired copy")
+	}
+	return a.repairBook(input, choices)
+}
+
+func (a *App) repairBook(input string, choices epub.RepairOptions) (library.RepairResult, error) {
 	if !a.operation.TryLock() {
 		return library.RepairResult{}, errors.New("a scan or repair is already running")
 	}
@@ -93,7 +117,7 @@ func (a *App) RepairBook(input string) (library.RepairResult, error) {
 	}
 	wruntime.EventsEmit(a.ctx, "scan:state", map[string]bool{"running": true})
 	defer wruntime.EventsEmit(a.ctx, "scan:state", map[string]bool{"running": false})
-	r, err := a.service.Repair(a.ctx, input, output)
+	r, err := a.service.RepairWithOptions(a.ctx, input, output, choices)
 	if warning := a.GetState().Warning; warning != "" {
 		wruntime.EventsEmit(a.ctx, "app:warning", warning)
 	}

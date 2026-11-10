@@ -18,9 +18,12 @@ browser installation step. Browser binaries and npm are not needed to build
 or run the desktop application.
 
 The suite covers importing, native-drop registration, progress and cancellation,
-repairs and unresolved findings, formal-check errors, metadata escaping,
+repair previews and unresolved findings, explicit script-cleanup selection,
+source-hash binding and refresh after source changes, pending-option changes,
+formal-check errors, metadata escaping,
 search/filter, preferences and estimates, exports, error recovery, report
-clearing, keyboard shortcuts, and layout at 980×680 and 1440×1000.
+clearing, whole-library rescans, keyboard shortcuts, and layout at 980×680 and
+1440×1000. Repair review is checked in both themes at the minimum window size.
 It checks for JavaScript/console errors and unexpected network requests.
 
 Optional environment variables:

@@ -29,7 +29,7 @@
   const number = value => Number(value || 0).toLocaleString();
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.0.0',progress:{index:0,total:0},queued:[]};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.1.0',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewError:'',reviewOptions:{fixLinks:true,fixDuplicateIds:true,removeScripts:false},previewing:false,previewWorker:false,reviewGeneration:0};
   const api = new Proxy({}, {get:(_,name)=>(...args)=>{
     const app=window.spineguardPreview || window.go?.main?.App;
     if(!app?.[name])return Promise.reject(new Error('The desktop connection is unavailable. Open SpineGuard from its application icon.'));
@@ -49,9 +49,10 @@
   }
   function setBusy(running){
     state.running=running;$('scan-progress').classList.toggle('hidden',!running);
-    for(const id of ['add-button','folder-button','empty-add-button','clear-button'])$(id).disabled=running||state.repairing;
+    for(const id of ['add-button','folder-button','empty-add-button','clear-button','rescan-library-button'])$(id).disabled=running||state.repairing||!!state.reviewPath||state.previewWorker;
+    $('rescan-library-button').disabled=$('rescan-library-button').disabled||!state.reports.length;
     $('cancel-button').disabled=state.cancelling;$('cancel-button').textContent=state.cancelling?'Cancelling…':'Cancel scan';
-    $('export-button').disabled=!state.reports.length||running;
+    $('export-button').disabled=!state.reports.length||running||state.repairing||!!state.reviewPath||state.previewWorker;
     if(running){$('progress-title').textContent='Checking your books…';$('progress-fill').style.width='0%';}
     renderDetail();
   }
@@ -89,8 +90,9 @@
     const total=state.reports.length,healthy=state.reports.filter(b=>b.status==='healthy').length,attention=state.reports.filter(hasAttention).length,unreadable=state.reports.filter(b=>b.status==='unreadable').length;
     $('nav-count').textContent=number(total);$('total-books').textContent=number(total);$('healthy-books').textContent=number(healthy);$('attention-books').textContent=number(attention+unreadable);
     $('all-count').textContent=number(total);$('healthy-count').textContent=number(healthy);$('attention-count').textContent=number(attention);$('unreadable-count').textContent=number(unreadable);
-    $('empty-state').classList.toggle('hidden',total>0);$('export-button').disabled=!total||state.running;$('clear-button').disabled=!total||state.running||state.repairing;
+    $('empty-state').classList.toggle('hidden',total>0);$('export-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;$('clear-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;
     $('library-footer-text').textContent=total?`${number(total)} ${total===1?'book':'books'} · ${number(state.reports.reduce((sum,b)=>sum+Number(b.stats?.words||0),0))} words`:'Ready for your first book';
+    $('rescan-library-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;
     const visible=visibleReports();$('no-results').classList.toggle('hidden',!total||visible.length>0);
     $('book-rows').innerHTML=visible.map(book=>`<button class="book-row${book.path===state.selected?' selected':''}" data-book-index="${state.reports.indexOf(book)}" aria-label="View ${esc(book.title||book.filename)}" aria-pressed="${book.path===state.selected}"><span class="book-summary">${cover(book)}<span class="book-title-text"><span class="book-title" title="${esc(book.title||book.filename)}">${esc(book.title||book.filename||'Untitled book')}</span><span class="book-author" title="${esc(book.author||book.filename)}">${esc(book.author||book.filename||'Unknown author')}</span></span></span><span>${badge(book)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.words)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.estimatedPages)}</span></button>`).join('');
     document.querySelectorAll('[data-filter]').forEach(button=>button.classList.toggle('active',button.dataset.filter===state.filter));
@@ -104,28 +106,96 @@
     const repairable=issues.some(issue=>issue.repairable),busy=state.running||state.repairing;
     const healthCopy=book.status==='healthy'?'The checks that ran found no issues. Explore the book’s stats below.':book.status==='unreadable'?'This book could not be fully read. Review the findings before adding it to your reader.':`${number(book.errors)} ${book.errors===1?'error':'errors'} and ${number(book.warnings)} ${book.warnings===1?'warning':'warnings'} found.${repairable?' Some findings have a repair available.':' Review the findings below for next steps.'}`;
     const epubcheck=book.epubcheck;
-    panel.innerHTML=`<div class="detail-kicker">BOOK INSPECTOR<button class="icon-button" data-detail-action="close" aria-label="Close book inspector">${icon('close')}</button></div><div class="detail-hero">${cover(book,true)}<div><h2>${esc(book.title||book.filename||'Untitled book')}</h2><p class="detail-author">${esc(book.author||'Unknown author')}</p><div class="book-tags"><span class="neutral-badge">EPUB ${esc(book.epubVersion||'?')}</span>${book.language?`<span class="neutral-badge">${esc(book.language.toLocaleUpperCase())}</span>`:''}<span class="neutral-badge">${esc(bytes(book.fileBytes))}</span></div></div></div><div class="health-summary ${esc(book.status)}">${badge(book)}<p>${esc(healthCopy)}</p></div>${epubcheck?`<div class="epubcheck-result"><strong>EPUBCheck · ${esc(epubcheck.status||'Not run')}${epubcheck.version?` · ${esc(epubcheck.version)}`:''}</strong>${esc(epubcheck.detail||'Formal standards validation.')}</div>`:''}<div class="detail-stats"><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.words)}</strong><span>Words in reading order</span></div><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.estimatedPages)}</strong><span>Estimated pages</span></div><div class="detail-stat"><strong>${number(stats.chapters)}</strong><span>Reading-order documents</span></div><div class="detail-stat"><strong>${readingTime(stats.readingMinutes)}</strong><span>Estimated reading time</span></div></div><p class="estimate-note">${number(state.settings.wordsPerPage)} words per estimated page · ${stats.sourcePages?`${number(stats.sourcePages)} source page markers`:'No source page markers supplied'}</p><div class="detail-actions"><button class="button ${repairable?'primary':'secondary'}" data-detail-action="repair" ${busy||!repairable?'disabled':''} title="${repairable?'Save a repaired copy and check it again':'No automatic repairs available for this book'}">${state.repairing?'<span class="spinner"></span>':icon('wrench')}${state.repairing?'Repairing…':'Repair a copy'}</button><button class="button secondary" data-detail-action="rescan" ${busy?'disabled':''}>${icon('refresh')}Rescan</button><button class="icon-button" data-detail-action="reveal" title="Show original file" aria-label="Show original file">${icon('folder')}</button></div>${repairable?'<p class="detail-note">Saves a separate copy. Your original is preserved.</p>':''}<div class="issue-heading"><h3>Findings</h3><div class="issue-counts"><span class="errors">${number(book.errors)} errors</span><span class="warnings">${number(book.warnings)} warnings</span></div></div><div class="issue-list">${issues.length?issues.slice().sort((a,b)=>({error:0,warning:1,info:2}[a.severity]??3)-({error:0,warning:1,info:2}[b.severity]??3)).map(issue=>`<article class="issue ${esc(issue.severity)}"><div class="issue-top"><span class="issue-icon">${icon(issue.severity==='error'?'error':issue.severity==='warning'?'alert':'info')}</span><h4>${esc(issue.title||issue.code)}</h4></div>${issue.detail?`<p>${esc(issue.detail)}</p>`:''}${issue.file?`<span class="issue-file">${esc(issue.file)}${issue.line?`:${number(issue.line)}`:''}</span>`:''}<div class="issue-meta"><span>${esc(issue.code||issue.severity)}</span>${issue.repairable?`<span class="repairable">${icon('wrench')}Repair available</span>`:''}</div></article>`).join(''):`<div class="no-issues"><span>${icon('check-circle')}</span>No findings from the checks that ran.</div>`}</div><details class="metadata-disclosure"><summary>File & publication details</summary><dl class="metadata-grid"><dt>File</dt><dd>${esc(book.filename)}</dd><dt>Location</dt><dd>${esc(book.path)}</dd><dt>Identifier</dt><dd>${esc(book.identifier||'Not supplied')}</dd><dt>Images / fonts</dt><dd>${number(stats.images)} / ${number(stats.fonts)}</dd><dt>Archive entries</dt><dd>${number(stats.files)}</dd><dt>Expanded size</dt><dd>${esc(bytes(stats.uncompressedBytes))}</dd><dt>Largest chapter</dt><dd>${esc(bytes(stats.largestChapterBytes))}</dd><dt>Last checked</dt><dd>${formatDate(book.scannedAt)}</dd><dt>Scan time</dt><dd>${number(book.durationMs)} ms</dd></dl></details>`;
+    panel.innerHTML=`<div class="detail-kicker">BOOK INSPECTOR<button class="icon-button" data-detail-action="close" aria-label="Close book inspector">${icon('close')}</button></div><div class="detail-hero">${cover(book,true)}<div><h2>${esc(book.title||book.filename||'Untitled book')}</h2><p class="detail-author">${esc(book.author||'Unknown author')}</p><div class="book-tags"><span class="neutral-badge">EPUB ${esc(book.epubVersion||'?')}</span>${book.language?`<span class="neutral-badge">${esc(book.language.toLocaleUpperCase())}</span>`:''}<span class="neutral-badge">${esc(bytes(book.fileBytes))}</span></div></div></div><div class="health-summary ${esc(book.status)}">${badge(book)}<p>${esc(healthCopy)}</p></div>${epubcheck?`<div class="epubcheck-result"><strong>EPUBCheck · ${esc(epubcheck.status||'Not run')}${epubcheck.version?` · ${esc(epubcheck.version)}`:''}</strong>${esc(epubcheck.detail||'Formal standards validation.')}</div>`:''}<div class="detail-stats"><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.words)}</strong><span>Words in reading order</span></div><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.estimatedPages)}</strong><span>Estimated pages</span></div><div class="detail-stat"><strong>${number(stats.chapters)}</strong><span>Reading-order documents</span></div><div class="detail-stat"><strong>${readingTime(stats.readingMinutes)}</strong><span>Estimated reading time</span></div></div><p class="estimate-note">${number(state.settings.wordsPerPage)} words per estimated page · ${stats.sourcePages?`${number(stats.sourcePages)} source page markers`:'No source page markers supplied'}</p><div class="detail-actions"><button class="button ${repairable?'primary':'secondary'}" data-detail-action="repair" ${busy||!issues.length?'disabled':''} title="${issues.length?'Review proposed repairs and reader cleanup':'No repairs needed: no findings were detected'}">${state.repairing?'<span class="spinner"></span>':icon('wrench')}${state.repairing?'Repairing…':'Review repairs'}</button><button class="button secondary" data-detail-action="rescan" ${busy?'disabled':''}>${icon('refresh')}Rescan</button><button class="icon-button" data-detail-action="reveal" title="Show original file" aria-label="Show original file">${icon('folder')}</button></div>${issues.length?'<p class="detail-note">Review changes before saving a separate copy. Your original is preserved.</p>':''}<div class="issue-heading"><h3>Findings</h3><div class="issue-counts"><span class="errors">${number(book.errors)} errors</span><span class="warnings">${number(book.warnings)} warnings</span></div></div><div class="issue-list">${issues.length?issues.slice().sort((a,b)=>({error:0,warning:1,info:2}[a.severity]??3)-({error:0,warning:1,info:2}[b.severity]??3)).map(issue=>`<article class="issue ${esc(issue.severity)}"><div class="issue-top"><span class="issue-icon">${icon(issue.severity==='error'?'error':issue.severity==='warning'?'alert':'info')}</span><h4>${esc(issue.title||issue.code)}</h4></div>${issue.detail?`<p>${esc(issue.detail)}</p>`:''}${issue.file?`<span class="issue-file">${esc(issue.file)}${issue.line?`:${number(issue.line)}`:''}</span>`:''}${repairExplanation(issue)?`<p class="repair-explanation">${esc(repairExplanation(issue))}</p>`:''}<div class="issue-meta"><span>${esc(issue.code||issue.severity)}</span>${issue.repairable?`<span class="repairable">${icon('wrench')}${issue.optionalRepair?'Optional reader cleanup':'Repair available'}</span>`:''}</div></article>`).join(''):`<div class="no-issues"><span>${icon('check-circle')}</span>No findings from the checks that ran.</div>`}</div><details class="metadata-disclosure"><summary>File & publication details</summary><dl class="metadata-grid"><dt>File</dt><dd>${esc(book.filename)}</dd><dt>Location</dt><dd>${esc(book.path)}</dd><dt>Identifier</dt><dd>${esc(book.identifier||'Not supplied')}</dd><dt>Images / fonts</dt><dd>${number(stats.images)} / ${number(stats.fonts)}</dd><dt>Archive entries</dt><dd>${number(stats.files)}</dd><dt>Expanded size</dt><dd>${esc(bytes(stats.uncompressedBytes))}</dd><dt>Largest chapter</dt><dd>${esc(bytes(stats.largestChapterBytes))}</dd><dt>Last checked</dt><dd>${formatDate(book.scannedAt)}</dd><dt>Scan time</dt><dd>${number(book.durationMs)} ms</dd></dl></details>`;
+  }
+  function repairExplanation(issue){
+    if(issue.repairReason)return issue.repairReason;
+    if(issue.code==='CONTENT_SCRIPT')return 'Optional reader cleanup can remove scripts from a separate copy. Interactive content may stop working.';
+    if(issue.code==='LINK_MISSING'||issue.code==='LINK_FRAGMENT')return 'Review repairs to look for one proven destination. Ambiguous or absent targets are left for manual correction.';
+    if(issue.code==='CONTENT_DUPLICATE_ID')return 'Review repairs to recheck source identifiers. Renaming is offered only when references and styling can be preserved.';
+    if(issue.code==='XML_DTD_CHECK_INCOMPLETE')return 'Run EPUBCheck for this assessment. SpineGuard preserves DTD-dependent content.';
+    if(issue.code?.startsWith('METADATA_'))return 'Missing publication metadata needs a confirmed value. SpineGuard does not guess it.';
+    if(issue.code==='FONT_OBFUSCATION')return 'Recognized font obfuscation is preserved; no cleanup is needed.';
+    return '';
   }
   function formatDate(value){const date=new Date(value);return Number.isNaN(date.getTime())?'—':esc(date.toLocaleString([], {dateStyle:'medium',timeStyle:'short'}));}
   function readingTime(value){const minutes=Number(value||0);if(minutes<60)return `${number(minutes)} min`;return `${Math.floor(minutes/60)}h ${minutes%60}m`;}
 
   async function scan(paths){
     paths=(Array.isArray(paths)?paths:[]).filter(path=>typeof path==='string'&&path.trim());if(!paths.length)return;
-    if(state.running||state.repairing){state.queued.push(...paths);toast('Added to the queue. These books will be checked after the current task.');return;}
+    if(state.running||state.repairing||state.reviewPath||state.previewWorker){state.queued.push(...paths);toast('Added to the queue. These books will be checked after the current task.');return;}
     state.cancelling=false;state.progress={index:0,total:0};setBusy(true);$('progress-path').textContent=paths.length===1?paths[0]:`${number(paths.length)} selected paths`;
     try{const reports=await api.ScanPaths(paths);if(Array.isArray(reports))reports.forEach(upsert);render();if(!state.cancelling)toast(reports?.length?`Checked ${number(reports.length)} ${reports.length===1?'book':'books'}.`:'No EPUB files were found in the selected location.');else toast('Scan stopped. Completed results are in your library.');}
     catch(error){toast(errorText(error),'error',10000);}
     finally{state.cancelling=false;setBusy(false);render();drainQueue();}
   }
-  function drainQueue(){if(!state.running&&!state.repairing&&state.queued.length){const queued=[...new Set(state.queued)];state.queued=[];void scan(queued);}}
+  function drainQueue(){if(!state.running&&!state.repairing&&!state.reviewPath&&!state.previewWorker&&state.queued.length){const queued=[...new Set(state.queued)];state.queued=[];void scan(queued);}}
   async function chooseFiles(){try{const paths=await api.SelectFiles();if(paths?.length)await scan(paths);}catch(error){toast(errorText(error),'error');}}
   async function chooseFolder(){try{const path=await api.SelectFolder();if(path)await scan([path]);}catch(error){toast(errorText(error),'error');}}
-  async function repair(){
+  function repair(){
     const book=state.reports.find(item=>item.path===state.selected);if(!book||state.running||state.repairing)return;
-    state.repairing=true;setBusy(false);
+    state.reviewPath=book.path;state.repairPlan=null;state.reviewError='';
+    state.reviewOptions={fixLinks:true,fixDuplicateIds:true,removeScripts:false};
+    for(const [key,value]of Object.entries(state.reviewOptions))$('repair-options').elements.namedItem(key).checked=value;
+    $('repair-review-title').textContent=book.title||book.filename||'Your book';
+    $('repair-review-dialog').showModal();setBusy(false);requestRepairPreview();
+  }
+  function requestRepairPreview(){
+    if(!state.reviewPath||state.repairing)return;
+    state.reviewGeneration++;state.repairPlan=null;state.reviewError='';state.previewing=true;
+    renderRepairReview();if(!state.previewWorker)void runRepairPreview();
+  }
+  async function runRepairPreview(){
+    state.previewWorker=true;
     try{
-      const result=await api.RepairBook(book.path);
+      while(state.reviewPath){
+        const generation=state.reviewGeneration,path=state.reviewPath,options={...state.reviewOptions};
+        try{
+          const plan=await api.PreviewRepair(path,options);
+          if(!state.reviewPath)return;
+          if(generation!==state.reviewGeneration||path!==state.reviewPath)continue;
+          if(!plan||!Array.isArray(plan.actions))throw new Error('The repair review was incomplete. Refresh it before saving.');
+          state.repairPlan=plan;state.reviewError='';
+          if(plan.report?.path){upsert(plan.report);render();}
+        }catch(error){
+          if(!state.reviewPath)return;
+          if(generation!==state.reviewGeneration||path!==state.reviewPath)continue;
+          state.repairPlan=null;state.reviewError=errorText(error);
+        }
+        state.previewing=false;renderRepairReview();break;
+      }
+    }finally{state.previewWorker=false;if(!state.reviewPath){setBusy(false);render();drainQueue();}}
+  }
+  function renderRepairReview(){
+    const plan=state.repairPlan,actions=Array.isArray(plan?.actions)?plan.actions:[],unresolved=Array.isArray(plan?.unresolved)?plan.unresolved:[];
+    const blocked=plan?.blockedReason||'',pending=state.previewing;
+    $('repair-review-dialog').setAttribute('aria-busy',String(pending||state.repairing));
+    $('save-repair-button').disabled=pending||state.repairing||!!state.reviewError||!!blocked||!actions.length||!plan?.sourceSha256;
+    $('save-repair-button').innerHTML=state.repairing?'<span class="spinner"></span>Saving copy…':`${icon('wrench')}Save repaired copy`;
+    $('refresh-repair-preview').disabled=pending||state.repairing;
+    $('repair-options').disabled=state.repairing;
+    $('repair-review-dialog').querySelectorAll('[data-close]').forEach(button=>{button.disabled=state.repairing;});
+    if(pending){$('repair-plan-summary').innerHTML='<div class="busy-indicator" role="status"><span class="spinner"></span>Checking the current book and preparing changes…</div>';$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
+    if(state.reviewError){$('repair-plan-summary').innerHTML=`<div class="repair-review-message error" role="alert"><strong>Review needs to be refreshed</strong><p>${esc(state.reviewError)}</p><p>Refresh the review to check the current file before trying again.</p></div>`;$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
+    $('repair-plan-summary').innerHTML=blocked
+      ?`<div class="repair-review-message error"><strong>This copy cannot be repaired automatically</strong><p>${esc(blocked)}</p></div>`
+      :actions.length
+        ?`<div class="repair-review-message"><strong>${number(actions.length)} proposed ${actions.length===1?'change':'changes'}</strong><p>Only the changes below will be applied. The new copy will be checked again; unresolved findings remain visible.</p></div>`
+        :'<div class="repair-review-message"><strong>No selected automatic changes are available</strong><p>Review the findings below. You can select optional reader cleanup when scripts are present, or correct unresolved content with an EPUB editor.</p></div>';
+    if(plan?.report?.epubcheck)$('repair-plan-summary').innerHTML+='<p class="review-section-note">Preview predictions cover built-in checks. EPUBCheck is run again on the saved copy.</p>';
+    $('repair-plan-actions').innerHTML=actions.length?`<h3>Proposed changes</h3><ul class="repair-plan-list">${actions.map(action=>`<li><div class="repair-plan-heading"><strong>${esc(action.description||action.kind||'Repair')}</strong>${action.requiresOptIn?'<span class="neutral-badge cleanup-badge">READER CLEANUP</span>':''}</div>${action.file?`<span class="issue-file">${esc(action.file)}</span>`:''}${Number(action.count)>1?`<span class="repair-count">${number(action.count)} changes in this action</span>`:''}</li>`).join('')}</ul>`:'';
+    $('repair-plan-unresolved').innerHTML=unresolved.length?`<h3>Findings left for review <span class="neutral-badge">${number(unresolved.length)}</span></h3><p class="review-section-note">These findings do not have a selected automatic fix. Compatibility advisories and incomplete checks may need a different action.</p><div class="review-unresolved-list">${unresolved.map(issue=>`<article class="review-unresolved"><strong>${esc(issue.title||issue.code||'Finding')}</strong>${issue.file?`<span class="issue-file">${esc(issue.file)}</span>`:''}<p>${esc(repairExplanation(issue)||issue.detail||'No proven automatic correction is available. Review this finding in an EPUB editor or obtain a corrected copy.')}</p></article>`).join('')}</div>`:!blocked&&actions.length?'<p class="review-section-note">No unresolved findings are predicted by the built-in checks for the selected changes. The saved copy will still be rescanned.</p>':'';
+  }
+  async function saveReviewedRepair(){
+    const plan=state.repairPlan,path=state.reviewPath;
+    if(!path||!plan||state.previewing||state.repairing||plan.blockedReason||!plan.actions?.length||!plan.sourceSha256||state.reviewError)return;
+    const options={...state.reviewOptions,expectedSha256:plan.sourceSha256};
+    state.repairing=true;setBusy(false);
+    renderRepairReview();
+    try{
+      const result=await api.RepairBookWithOptions(path,options);
       if(!result?.outputPath)return;
+      $('repair-review-dialog').close();
       state.repairedPath=result.outputPath;
       upsert(result.report);
       state.selected=result.report?.path||state.selected;
@@ -146,8 +216,8 @@
         ${remaining?'<p class="detail-note repair-followup">Review the repaired copy’s findings in the library before sideloading.</p>':''}`;
       $('result-dialog').showModal();
     }
-    catch(error){toast(errorText(error),'error',12000);}
-    finally{state.repairing=false;setBusy(false);render();drainQueue();}
+    catch(error){state.reviewError=errorText(error);state.repairPlan=null;}
+    finally{state.repairing=false;setBusy(false);render();if(state.reviewPath)renderRepairReview();drainQueue();}
   }
   function openSettings(){
     const form=$('settings-form');for(const [key,value]of Object.entries({...defaults,...state.settings})){const field=form.elements.namedItem(key);if(!field)continue;if(field.type==='checkbox')field.checked=!!value;else field.value=value??'';}$('settings-dialog').showModal();
@@ -164,6 +234,7 @@
 
   function wireEvents(){
     $('add-button').addEventListener('click',chooseFiles);$('empty-add-button').addEventListener('click',chooseFiles);$('folder-button').addEventListener('click',chooseFolder);
+    $('rescan-library-button').addEventListener('click',()=>{if(!state.running&&!state.repairing&&!state.reviewPath)void scan(state.reports.map(book=>book.path));});
     $('settings-nav').addEventListener('click',openSettings);$('help-button').addEventListener('click',()=>$('help-dialog').showModal());$('library-nav').addEventListener('click',()=>{state.filter='all';state.query='';$('search-input').value='';render();});
     $('settings-form').addEventListener('submit',saveSettings);
     $('browse-epubcheck').addEventListener('click',async()=>{try{const path=await api.SelectEPUBCheck();if(path)$('settings-form').elements.epubcheckJar.value=path;}catch(error){toast(errorText(error),'error');}});
@@ -178,6 +249,11 @@
     document.addEventListener('click',event=>{if(!event.target.closest('.export-container')){$('export-menu').classList.add('hidden');$('export-button').setAttribute('aria-expanded','false');}});
     $('clear-button').addEventListener('click',()=>$('confirm-dialog').showModal());$('confirm-clear-button').addEventListener('click',async()=>{try{await api.ClearReports();state.reports=[];state.selected=null;state.filter='all';state.query='';$('search-input').value='';render();$('confirm-dialog').close();toast('Reports cleared. Your books are untouched.');}catch(error){toast(errorText(error),'error');}});
     $('reveal-repair-button').addEventListener('click',()=>reveal(state.repairedPath));
+    $('repair-options').addEventListener('change',()=>{for(const key of ['fixLinks','fixDuplicateIds','removeScripts'])state.reviewOptions[key]=$('repair-options').elements.namedItem(key).checked;requestRepairPreview();});
+    $('refresh-repair-preview').addEventListener('click',requestRepairPreview);
+    $('save-repair-button').addEventListener('click',saveReviewedRepair);
+    $('repair-review-dialog').addEventListener('cancel',event=>{if(state.repairing)event.preventDefault();});
+    $('repair-review-dialog').addEventListener('close',()=>{state.reviewPath='';state.repairPlan=null;state.reviewError='';state.previewing=false;state.reviewGeneration++;setBusy(false);render();drainQueue();});
     document.addEventListener('keydown',event=>{const editing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);if((event.ctrlKey||event.metaKey)&&event.key.toLocaleLowerCase()==='o'){event.preventDefault();if(!state.running&&!state.repairing&&!document.querySelector('dialog[open]'))void chooseFiles();}else if(event.key==='/'&&!editing&&!document.querySelector('dialog[open]')){event.preventDefault();$('search-input').focus();}else if(event.key==='Escape'){$('export-menu').classList.add('hidden');$('drop-overlay').classList.add('hidden');}});
     let dragDepth=0;document.addEventListener('dragenter',event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();dragDepth++;$('drop-overlay').classList.remove('hidden');}});document.addEventListener('dragleave',()=>{dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)$('drop-overlay').classList.add('hidden');});document.addEventListener('dragover',event=>{event.preventDefault();});document.addEventListener('drop',event=>{event.preventDefault();dragDepth=0;$('drop-overlay').classList.add('hidden');});window.addEventListener('blur',()=>{dragDepth=0;$('drop-overlay').classList.add('hidden');});
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>{if(state.settings.theme==='system')setTheme('system');});
@@ -197,7 +273,7 @@
     $('settings-form').elements.readingWPM.min='80';
     if(/Mac/i.test(navigator.platform))$('open-shortcut').textContent='⌘ O';
     if(window.spineguardPreview){const banner=document.createElement('div');banner.className='preview-banner';banner.textContent='Preview data — desktop interaction adapter';document.querySelector('.main-content').prepend(banner);}
-    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.0.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
+    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.1.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
     catch(error){toast(errorText(error),'error',15000);}
   }
   void init();

@@ -50,6 +50,7 @@ func Scan(ctx context.Context, filename string, opts Options) (report Report, er
 		return report, nil
 	}
 	defer a.z.Close()
+	defer annotateRepairIssues(a, &report)
 	if len(a.z.File) > maxEntries {
 		return report, nil
 	}

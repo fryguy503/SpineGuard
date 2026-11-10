@@ -178,28 +178,13 @@ func resolveReference(base, href string) (target, fragment string, external bool
 type reference struct{ href, attribute string }
 type contentInfo struct {
 	ids           map[string]bool
+	idCounts      map[string]int
 	refs          []reference
 	words, pages  int
 	nav, pageList bool
 	rootNamespace string
 }
 
-func attr(n *html.Node, key string) string {
-	for _, a := range n.Attr {
-		if a.Key == key {
-			return a.Val
-		}
-	}
-	return ""
-}
-func hasAttr(n *html.Node, key string) bool {
-	for _, a := range n.Attr {
-		if a.Key == key {
-			return true
-		}
-	}
-	return false
-}
 func tokenHas(s, t string) bool {
 	for _, f := range strings.Fields(s) {
 		if f == t {
@@ -232,137 +217,277 @@ func wordCount(s string) int {
 }
 
 func (a *archive) inspectContent(name string, b []byte) contentInfo {
-	info := contentInfo{ids: map[string]bool{}}
-	input := utf8Input(b)
-	// Count tokens before building a DOM. Checking the completed tree alone lets
-	// a small file containing millions of tiny tags allocate excessive memory.
-	tokenizer := html.NewTokenizer(bytes.NewReader(input))
-	var openElements []string
-	for tokens := 0; ; tokens++ {
+	c := newContentCollector(name)
+	err := a.inspectXMLContent(b, c)
+	if err != nil {
 		if a.ctx.Err() != nil {
-			return info
+			return contentInfo{ids: map[string]bool{}, idCounts: map[string]int{}}
+		}
+		if _, limited := err.(contentLimitError); limited {
+			a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", err.Error()+" Word counts and references may be incomplete.", name, false)
+			return contentInfo{ids: map[string]bool{}, idCounts: map[string]int{}}
+		}
+		// A source tokenizer supplies an approximate inspection of malformed or
+		// DTD-dependent markup. It never creates/clones a DOM element, so repair
+		// warnings refer only to identifiers actually present in the source.
+		c = newContentCollector(name)
+		if err = a.inspectHTMLSource(b, c); err != nil {
+			if a.ctx.Err() == nil {
+				a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", err.Error()+" Word counts and references may be incomplete.", name, false)
+			}
+			return contentInfo{ids: map[string]bool{}, idCounts: map[string]int{}}
+		}
+	}
+	for _, issue := range c.issues {
+		a.issue(issue.Code, issue.Severity, issue.Title, issue.Detail, name, false)
+	}
+	c.info.words = wordCount(c.text.String())
+	return c.info
+}
+
+type contentLimitError string
+
+func (e contentLimitError) Error() string { return string(e) }
+
+type contentFrame struct {
+	tag                    string
+	body, hidden, pageList bool
+	style                  strings.Builder
+}
+type contentCollector struct {
+	info      contentInfo
+	text      strings.Builder
+	stack     []contentFrame
+	issues    []Issue
+	name      string
+	actualIDs map[string]int
+}
+
+func newContentCollector(name string) *contentCollector {
+	return &contentCollector{name: name, actualIDs: map[string]int{}, info: contentInfo{ids: map[string]bool{}, idCounts: map[string]int{}}}
+}
+
+const contentBlocks = "address article aside blockquote br dd div dl dt figcaption figure footer h1 h2 h3 h4 h5 h6 header hr li main ol p pre section table td th tr ul"
+
+func (c *contentCollector) note(code, title, detail string) {
+	if len(c.issues) <= maxIssues {
+		c.issues = append(c.issues, Issue{Code: code, Severity: "warning", Title: title, Detail: detail, File: c.name})
+	}
+}
+func (c *contentCollector) start(tag, space string, attrs map[string]string) error {
+	if len(c.stack) >= 1024 {
+		return contentLimitError("Nesting exceeds the 1,024-level content limit.")
+	}
+	frame := contentFrame{tag: tag}
+	if len(c.stack) > 0 {
+		p := &c.stack[len(c.stack)-1]
+		frame.body = p.body
+		frame.hidden = p.hidden
+		frame.pageList = p.pageList
+	} else {
+		c.info.rootNamespace = space
+	}
+	frame.body = frame.body || tag == "body"
+	_, hiddenAttribute := attrs["hidden"]
+	style := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return unicode.ToLower(r)
+	}, attrs["style"])
+	contentNamespace := space == xhtmlNS || space == "" || space == "http://www.w3.org/2000/svg"
+	frame.hidden = frame.hidden || contentNamespace && tokenHas("script style nav noscript template", tag) || hiddenAttribute || strings.EqualFold(attrs["aria-hidden"], "true") || strings.Contains(style, "display:none")
+	if tokenHas(contentBlocks, tag) {
+		c.text.WriteByte(' ')
+	}
+	// id and a legacy name on the same element identify one destination.
+	// An identifier repeated on a different source element is ambiguous.
+	anchors := map[string]bool{}
+	actualIDs := map[string]bool{}
+	for _, id := range []string{attrs["id"], attrs["xml:id"]} {
+		if id != "" {
+			anchors[id] = true
+			actualIDs[id] = true
+		}
+	}
+	if tag == "a" && attrs["name"] != "" {
+		anchors[attrs["name"]] = true
+	}
+	for id := range actualIDs {
+		if c.actualIDs[id] > 0 {
+			c.note("CONTENT_DUPLICATE_ID", "Duplicate content identifier", "Links to this identifier may be ambiguous: "+id)
+		}
+		c.actualIDs[id]++
+	}
+	for id := range anchors {
+		c.info.ids[id] = true
+		c.info.idCounts[id]++
+	}
+	scripted := tag == "script" && contentNamespace
+	for key, value := range attrs {
+		if key == "href" || key == "src" || key == "poster" || (key == "data" && tag == "object") {
+			c.info.refs = append(c.info.refs, reference{value, tag + "@" + key})
+		}
+		if key == "style" {
+			c.info.refs = append(c.info.refs, cssReferences([]byte(value))...)
+		}
+		if tokenHas("fill stroke filter clip-path mask marker marker-start marker-mid marker-end", key) {
+			c.info.refs = append(c.info.refs, cssReferences([]byte(value))...)
+		}
+		if contentNamespace && eventHandlerName(key) {
+			scripted = true
+		}
+		if contentNamespace && (key == "href" || key == "src" || key == "action" || key == "formaction") && javascriptURL(value) {
+			scripted = true
+		}
+	}
+	etype := attrs["epub:type"]
+	if etype == "" {
+		etype = attrs["type"]
+	}
+	if tag == "nav" && tokenHas(etype, "toc") {
+		c.info.nav = true
+	}
+	if tag == "nav" && tokenHas(etype, "page-list") {
+		c.info.pageList = true
+		frame.pageList = true
+	}
+	if tokenHas(etype, "pagebreak") || attrs["role"] == "doc-pagebreak" {
+		c.info.pages++
+	}
+	if frame.pageList && tag == "a" {
+		c.info.pages++
+	}
+	if scripted {
+		c.note("CONTENT_SCRIPT", "Scripted content", "Scripts and scripted actions can increase reader workload. Optional reader cleanup can remove them from a separate copy; interactive features may stop working.")
+	}
+	if tag == "iframe" {
+		c.note("CONTENT_IFRAME", "Embedded frame", "Embedded frames may not be supported by all e-readers.")
+	}
+	c.stack = append(c.stack, frame)
+	return nil
+}
+func (c *contentCollector) chars(value []byte) {
+	if len(c.stack) == 0 {
+		return
+	}
+	f := &c.stack[len(c.stack)-1]
+	if f.body && !f.hidden {
+		c.text.Write(value)
+	}
+	if f.tag == "style" {
+		f.style.Write(value)
+	}
+}
+func (c *contentCollector) end() {
+	if len(c.stack) == 0 {
+		return
+	}
+	f := &c.stack[len(c.stack)-1]
+	if f.tag == "style" {
+		c.info.refs = append(c.info.refs, cssReferences([]byte(f.style.String()))...)
+	}
+	if tokenHas(contentBlocks, f.tag) {
+		c.text.WriteByte(' ')
+	}
+	c.stack = c.stack[:len(c.stack)-1]
+}
+
+func xmlContentAttributes(attrs []xml.Attr) map[string]string {
+	values := make(map[string]string, len(attrs))
+	for _, at := range attrs {
+		key := at.Name.Local
+		if at.Name.Space == "http://www.idpf.org/2007/ops" {
+			key = "epub:" + key
+		} else if at.Name.Space == "http://www.w3.org/XML/1998/namespace" {
+			key = "xml:" + key
+		} else if at.Name.Space != "" && at.Name.Space != "http://www.w3.org/1999/xlink" {
+			key = "ns:" + key
+		}
+		values[key] = at.Value
+	}
+	return values
+}
+func (a *archive) inspectXMLContent(b []byte, c *contentCollector) error {
+	d := decoder(b)
+	for tokens := 0; ; tokens++ {
+		if err := a.ctx.Err(); err != nil {
+			return err
 		}
 		if tokens >= 200000 {
-			a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "More than 200,000 HTML tokens. This document was not loaded into a DOM; word counts and references may be incomplete.", name, false)
-			return info
+			return contentLimitError("More than 200,000 source XML tokens.")
 		}
-		token := tokenizer.Next()
-		if token == html.ErrorToken {
-			break
+		t, err := d.Token()
+		if err == io.EOF {
+			return nil
 		}
-		if token == html.StartTagToken || token == html.SelfClosingTagToken {
-			tagName, moreAttributes := tokenizer.TagName()
-			tag := string(tagName)
-			attributes := 0
-			for moreAttributes {
-				_, _, moreAttributes = tokenizer.TagAttr()
-				attributes++
-				if attributes > 256 {
-					a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "An element has more than 256 attributes. It was not loaded into a DOM; word counts and references may be incomplete.", name, false)
-					return info
+		if err != nil {
+			return err
+		}
+		switch t := t.(type) {
+		case xml.StartElement:
+			if len(t.Attr) > 256 {
+				return contentLimitError("An element has more than 256 attributes.")
+			}
+			if err := c.start(t.Name.Local, t.Name.Space, xmlContentAttributes(t.Attr)); err != nil {
+				return err
+			}
+		case xml.EndElement:
+			c.end()
+		case xml.CharData:
+			c.chars(t)
+		}
+	}
+}
+func (a *archive) inspectHTMLSource(b []byte, c *contentCollector) error {
+	z := html.NewTokenizer(bytes.NewReader(utf8Input(b)))
+	for tokens := 0; ; tokens++ {
+		if err := a.ctx.Err(); err != nil {
+			return err
+		}
+		if tokens >= 200000 {
+			return contentLimitError("More than 200,000 source HTML tokens.")
+		}
+		t := z.Next()
+		if t == html.ErrorToken {
+			return nil
+		}
+		switch t {
+		case html.StartTagToken, html.SelfClosingTagToken:
+			name, more := z.TagName()
+			tag := string(name)
+			attrs := map[string]string{}
+			count := 0
+			for more {
+				key, value, next := z.TagAttr()
+				more = next
+				count++
+				if count > 256 {
+					return contentLimitError("An element has more than 256 attributes.")
 				}
+				attrs[string(key)] = string(value)
 			}
-			// The HTML parser treats self-closing non-void HTML tags as opens.
-			// Conservatively count those too before allocating its open stack.
-			if !tokenHas("area base br col embed hr img input link meta param source track wbr", tag) {
-				openElements = append(openElements, tag)
+			if err := c.start(tag, "", attrs); err != nil {
+				return err
 			}
-			if len(openElements) > 1024 {
-				a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "Nesting exceeds the 1,024-level preflight limit. This document was not loaded into a DOM; word counts and references may be incomplete.", name, false)
-				return info
+			if t == html.SelfClosingTagToken || tokenHas("area base br col embed hr img input link meta param source track wbr", tag) {
+				c.end()
+				z.NextIsNotRawText()
 			}
-		} else if token == html.EndTagToken {
-			tagName, _ := tokenizer.TagName()
-			for i := len(openElements) - 1; i >= 0; i-- {
-				if openElements[i] == string(tagName) {
-					openElements = openElements[:i]
+		case html.EndTagToken:
+			name, _ := z.TagName()
+			for i := len(c.stack) - 1; i >= 0; i-- {
+				if c.stack[i].tag == string(name) {
+					for len(c.stack) > i {
+						c.end()
+					}
 					break
 				}
 			}
+		case html.TextToken:
+			c.chars(z.Text())
 		}
 	}
-	doc, err := html.Parse(bytes.NewReader(input))
-	if err != nil {
-		return info
-	}
-	var text strings.Builder
-	nodes := 0
-	truncated := false
-	var walk func(*html.Node, bool, bool, bool, int)
-	walk = func(n *html.Node, inBody, hidden, inPageList bool, depth int) {
-		nodes++
-		if nodes > 200000 || depth > 1024 {
-			if !truncated {
-				a.issue("CONTENT_COMPLEXITY", "error", "Content exceeds structural scan limits", "The scan stopped after 200,000 nodes or 1,024 nesting levels. Word counts and references may be incomplete.", name, false)
-				truncated = true
-			}
-			return
-		}
-		if n.Type == html.ElementNode {
-			if n.Data == "body" {
-				inBody = true
-			}
-			hidden = hidden || n.Data == "script" || n.Data == "style" || n.Data == "nav" || n.Data == "noscript" || n.Data == "template" || hasAttr(n, "hidden") || attr(n, "aria-hidden") == "true" || strings.Contains(strings.ReplaceAll(strings.ToLower(attr(n, "style")), " ", ""), "display:none")
-			if tokenHas("address article aside blockquote br dd div dl dt figcaption figure footer h1 h2 h3 h4 h5 h6 header hr li main ol p pre section table td th tr ul", n.Data) {
-				text.WriteByte(' ')
-			}
-			if id := attr(n, "id"); id != "" {
-				if info.ids[id] {
-					a.issue("CONTENT_DUPLICATE_ID", "warning", "Duplicate content identifier", "Links to this identifier may be ambiguous: "+id, name, false)
-				}
-				info.ids[id] = true
-			}
-			if id := attr(n, "name"); id != "" && n.Data == "a" {
-				info.ids[id] = true
-			}
-			for _, at := range n.Attr {
-				if at.Key == "href" || at.Key == "src" || at.Key == "poster" || (at.Key == "data" && n.Data == "object") {
-					info.refs = append(info.refs, reference{at.Val, n.Data + "@" + at.Key})
-				}
-				if at.Key == "style" {
-					info.refs = append(info.refs, cssReferences([]byte(at.Val))...)
-				}
-			}
-			etype := attr(n, "epub:type")
-			if etype == "" {
-				etype = attr(n, "type")
-			}
-			if n.Data == "nav" && tokenHas(etype, "toc") {
-				info.nav = true
-			}
-			if n.Data == "nav" && tokenHas(etype, "page-list") {
-				info.pageList = true
-				inPageList = true
-			}
-			if tokenHas(etype, "pagebreak") || attr(n, "role") == "doc-pagebreak" {
-				info.pages++
-			}
-			if inPageList && n.Data == "a" {
-				info.pages++
-			}
-			if n.Data == "script" {
-				a.issue("CONTENT_SCRIPT", "warning", "Scripted content", "Scripts can increase reader workload. This is a compatibility advisory, not a Kobo device limit.", name, false)
-			}
-			if n.Data == "iframe" {
-				a.issue("CONTENT_IFRAME", "warning", "Embedded frame", "Embedded frames may not be supported by all e-readers.", name, false)
-			}
-		}
-		if n.Type == html.TextNode && inBody && !hidden {
-			text.WriteString(n.Data)
-		}
-		if n.Type == html.TextNode && n.Parent != nil && n.Parent.Data == "style" {
-			info.refs = append(info.refs, cssReferences([]byte(n.Data))...)
-		}
-		for c := n.FirstChild; c != nil; c = c.NextSibling {
-			walk(c, inBody, hidden, inPageList, depth+1)
-		}
-		if n.Type == html.ElementNode && tokenHas("address article aside blockquote br dd div dl dt figcaption figure footer h1 h2 h3 h4 h5 h6 header hr li main ol p pre section table td th tr ul", n.Data) {
-			text.WriteByte(' ')
-		}
-	}
-	walk(doc, false, false, false, 0)
-	info.words = wordCount(text.String())
-	return info
 }
 
 func inspectXMLReferences(b []byte) contentInfo {
