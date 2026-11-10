@@ -30,7 +30,7 @@
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
   const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.2.0',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.2.1',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0};
   const api = new Proxy({}, {get:(_,name)=>(...args)=>{
     const app=window.spineguardPreview || window.go?.main?.App;
     if(!app?.[name])return Promise.reject(new Error('The desktop connection is unavailable. Open SpineGuard from its application icon.'));
@@ -138,8 +138,10 @@
   function repair(){
     const book=state.reports.find(item=>item.path===state.selected);if(!book||state.running||state.repairing)return;
     state.reviewPath=book.path;state.repairPlan=null;state.reviewError='';
-    state.reviewOptions={...repairDefaults};state.reviewSuggestions={};
+    state.reviewOptions={...repairDefaults};state.reviewSuggestions={};state.reviewReport=null;state.reviewSHA='';state.reviewKinds=new Set();
     for(const [key,value]of Object.entries(state.reviewOptions)){const field=$('repair-options').elements.namedItem(key);if(field.type==='checkbox')field.checked=value;else field.value=value;}
+    $('repair-language-select').value='';$('repair-custom-language').classList.add('hidden');
+    $('repair-advanced').open=false;$('repair-technical').open=false;
     $('repair-review-title').textContent=book.title||book.filename||'Your book';
     $('repair-review-dialog').showModal();setBusy(false);requestRepairPreview();
   }
@@ -163,6 +165,10 @@
           if(generation!==state.reviewGeneration||path!==state.reviewPath)continue;
           if(!plan||!Array.isArray(plan.actions))throw new Error('The repair review was incomplete. Refresh it before saving.');
           state.repairPlan=plan;state.reviewError='';
+          state.reviewReport=plan.report||state.reviewReport;
+          if(state.reviewSHA!==plan.sourceSha256)state.reviewKinds=new Set();
+          state.reviewSHA=plan.sourceSha256;
+          for(const action of plan.actions)state.reviewKinds.add(action.kind);
           state.reviewSuggestions=plan.suggestions&&typeof plan.suggestions==='object'?plan.suggestions:{};
           if(plan.report?.path){upsert(plan.report);render();}
         }catch(error){
@@ -174,33 +180,92 @@
       }
     }finally{state.previewWorker=false;if(!state.reviewPath){setBusy(false);render();drainQueue();}}
   }
+  function languageName(tag){
+    try{return new Intl.DisplayNames(['en'],{type:'language'}).of(tag)||tag;}catch{return tag;}
+  }
+  function selectRepairLanguage(tag){
+    const select=$('repair-language-select');
+    if(tag&&!Array.from(select.options).some(option=>option.value===tag)){
+      const option=document.createElement('option');option.value=tag;option.textContent=languageName(tag);select.add(option,select.lastElementChild);
+    }
+    select.value=tag;$('repair-language').value=tag;state.reviewOptions.language=tag;
+    $('repair-custom-language').classList.add('hidden');
+  }
+  function repairChoiceContext(){
+    const issues=Array.isArray(state.reviewReport?.issues)?state.reviewReport.issues:[];
+    const eligible=issue=>issue.repairable===true;
+    return {
+      issues,
+      language:issues.some(issue=>/^METADATA_LANGUAGE(?:_INVALID)?$/.test(issue.code)&&eligible(issue)),
+      identity:issues.some(issue=>issue.code==='METADATA_IDENTIFIER'&&issue.optionalRepair&&eligible(issue)),
+      scripts:issues.some(issue=>['CONTENT_SCRIPT','CONTENT_EVENT_HANDLER','CONTENT_JAVASCRIPT_URL'].includes(issue.code)&&eligible(issue)),
+    };
+  }
+  function simpleRepairActions(actions){
+    // Repacking accompanies every edit; show it as a fix only when it is the only action.
+    const visible=actions.some(action=>action.kind!=='packaging')?actions.filter(action=>action.kind!=='packaging'):actions;
+    const labels={links:'Fix broken links',duplicate_ids:'Fix book structure',document_markup:'Fix formatting problems',metadata:'Correct book details',entities:'Standardize special characters',reader_cleanup:'Remove interactive features',packaging:'Fix EPUB file structure',xml:'Fix document formatting'};
+    return [...new Set(visible.map(action=>labels[action.kind]||'Apply additional repairs'))];
+  }
+  function manualRepairHelp(issue){
+    const off={LINK_MISSING:'fixLinks',LINK_FRAGMENT:'fixLinks',CONTENT_DUPLICATE_ID:'fixDuplicateIds',OPF_GUIDE_EMPTY:'fixDocumentMarkup',SVG_PRESERVE_ASPECT_RATIO:'fixDocumentMarkup',METADATA_LANGUAGE:'fixMetadata',METADATA_LANGUAGE_INVALID:'fixMetadata',METADATA_IDENTIFIER:'fixMetadata',NCX_IDENTIFIER_MISMATCH:'fixMetadata'}[issue.code];
+    if(issue.repairable&&off&&!state.reviewOptions[off])return 'This fix is switched off. Turn it back on in Advanced options to include it.';
+    if(issue.code==='LINK_MISSING'||issue.code==='LINK_FRAGMENT')return 'The correct destination could not be found. A corrected copy of the book may be needed.';
+    if(/^METADATA_/.test(issue.code)||issue.code==='NCX_IDENTIFIER_MISMATCH')return 'These book details need to be corrected in an EPUB editor or by the book’s provider.';
+    if(issue.code==='CONTENT_DUPLICATE_ID')return 'This needs a manual edit to avoid changing links or appearance.';
+    if(issue.code==='XML_DTD_CHECK_INCOMPLETE')return 'Run EPUBCheck from Preferences for a complete check of this content.';
+    if(issue.code==='CHAPTER_LARGE'||issue.code==='CONTENT_LARGE')return 'This is a compatibility warning. SpineGuard cannot safely simplify this chapter.';
+    return 'SpineGuard cannot fix this automatically. Try a fresh download or ask the book’s provider for a corrected copy.';
+  }
   function renderRepairReview(){
-    const plan=state.repairPlan,actions=Array.isArray(plan?.actions)?plan.actions:[],unresolved=Array.isArray(plan?.unresolved)?plan.unresolved:[];
-    const blocked=plan?.blockedReason||'',pending=state.previewing;
+    const plan=state.repairPlan,actions=Array.isArray(plan?.actions)?plan.actions:[],unresolved=Array.isArray(plan?.unresolved)?plan.unresolved.filter(issue=>issue.severity!=='info'):[];
+    const blocked=plan?.blockedReason||'',pending=state.previewing,context=repairChoiceContext();
+    const metadataDisabled=!state.reviewOptions.fixMetadata||state.repairing||!!blocked;
     $('repair-review-dialog').setAttribute('aria-busy',String(pending||state.repairing));
     $('save-repair-button').disabled=pending||state.repairing||!!state.reviewError||!!blocked||!actions.length||!plan?.sourceSha256;
     $('save-repair-button').innerHTML=state.repairing?'<span class="spinner"></span>Saving copy…':`${icon('wrench')}Save repaired copy`;
     $('refresh-repair-preview').disabled=pending||state.repairing;
-    $('repair-options').disabled=state.repairing;
-    const language=$('repair-options').elements.namedItem('language'),generate=$('repair-options').elements.namedItem('generateIdentifier');
-    language.disabled=!state.reviewOptions.fixMetadata||state.repairing;generate.disabled=!state.reviewOptions.fixMetadata||state.repairing;
+    $('refresh-repair-preview').classList.toggle('hidden',!state.reviewError);
+    $('repair-options').disabled=state.repairing||!!blocked;
+    $('repair-language-choice').classList.toggle('hidden',!context.language||!!blocked);
+    $('repair-identity-choice').classList.toggle('hidden',!context.identity||!!blocked);
+    $('repair-script-choice').classList.toggle('hidden',!context.scripts||!!blocked);
+    $('repair-language').disabled=metadataDisabled;$('repair-language-select').disabled=metadataDisabled;
+    $('repair-options').elements.namedItem('generateIdentifier').disabled=metadataDisabled;
     const detected=typeof state.reviewSuggestions.language==='string'?state.reviewSuggestions.language:'';
     const sources=Array.isArray(state.reviewSuggestions.languageSources)?state.reviewSuggestions.languageSources:[];
     $('language-suggestion').classList.toggle('hidden',!detected);
-    $('use-detected-language').textContent=`Use detected ${detected}`;
-    $('use-detected-language').disabled=!detected||!state.reviewOptions.fixMetadata||state.repairing||pending;
-    $('language-suggestion-source').textContent=sources.length?`Found in: ${sources.join(', ')}`:'Detected in the book’s language markup.';
+    $('use-detected-language').textContent=`Use ${languageName(detected)}`;
+    $('use-detected-language').disabled=!detected||metadataDisabled||pending;
+    $('language-suggestion-source').textContent=detected?(sources.length?`Language suggestion: ${detected}. Found in: ${sources.join(', ')}`:`Language suggestion: ${detected}, from the book’s language markup.`):'';
+    const categories={
+      links:context.issues.some(issue=>['LINK_MISSING','LINK_FRAGMENT'].includes(issue.code)&&issue.repairable),
+      duplicate_ids:context.issues.some(issue=>issue.code==='CONTENT_DUPLICATE_ID'&&issue.repairable),
+      document_markup:context.issues.some(issue=>['OPF_GUIDE_EMPTY','SVG_PRESERVE_ASPECT_RATIO'].includes(issue.code)&&issue.repairable),
+      metadata:context.issues.some(issue=>(/^METADATA_/.test(issue.code)||issue.code==='NCX_IDENTIFIER_MISMATCH')&&issue.repairable),
+    };
+    document.querySelectorAll('[data-repair-category]').forEach(label=>label.classList.toggle('hidden',!categories[label.dataset.repairCategory]&&!state.reviewKinds.has(label.dataset.repairCategory)));
+    $('repair-advanced').classList.toggle('hidden',!state.reviewReport||!!blocked);
     $('repair-review-dialog').querySelectorAll('[data-close]').forEach(button=>{button.disabled=state.repairing;});
-    if(pending){$('repair-plan-summary').innerHTML='<div class="busy-indicator" role="status"><span class="spinner"></span>Checking the current book and preparing changes…</div>';$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
-    if(state.reviewError){$('repair-plan-summary').innerHTML=`<div class="repair-review-message error" role="alert"><strong>Review needs to be refreshed</strong><p>${esc(state.reviewError)}</p><p>Refresh the review to check the current file before trying again.</p></div>`;$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
-    $('repair-plan-summary').innerHTML=blocked
-      ?`<div class="repair-review-message error"><strong>This copy cannot be repaired automatically</strong><p>${esc(blocked)}</p></div>`
-      :actions.length
-        ?`<div class="repair-review-message"><strong>${number(actions.length)} proposed ${actions.length===1?'change':'changes'}</strong><p>Only the changes below will be applied. The new copy will be checked again; unresolved findings remain visible.</p></div>`
-        :'<div class="repair-review-message"><strong>No selected automatic changes are available</strong><p>Review the findings below. Confirm metadata or select an optional cleanup to see its changes; unsupported findings need an EPUB editor.</p></div>';
-    if(plan?.report?.epubcheck)$('repair-plan-summary').innerHTML+='<p class="review-section-note">Preview predictions cover built-in checks. EPUBCheck is run again on the saved copy.</p>';
-    $('repair-plan-actions').innerHTML=actions.length?`<h3>Proposed changes</h3><ul class="repair-plan-list">${actions.map(action=>`<li><div class="repair-plan-heading"><strong>${esc(action.description||action.kind||'Repair')}</strong>${action.requiresOptIn?`<span class="neutral-badge cleanup-badge">${action.kind==='reader_cleanup'?'READER CLEANUP':'OPTIONAL CHANGE'}</span>`:''}</div>${action.file?`<span class="issue-file">${esc(action.file)}</span>`:''}${Number(action.count)>1?`<span class="repair-count">${number(action.count)} changes in this action</span>`:''}</li>`).join('')}</ul>`:'';
-    $('repair-plan-unresolved').innerHTML=unresolved.length?`<h3>Findings left for review <span class="neutral-badge">${number(unresolved.length)}</span></h3><p class="review-section-note">These findings do not have a selected automatic fix. Compatibility advisories and incomplete checks may need a different action.</p><div class="review-unresolved-list">${unresolved.map(issue=>`<article class="review-unresolved"><strong>${esc(issue.title||issue.code||'Finding')}</strong>${issue.file?`<span class="issue-file">${esc(issue.file)}</span>`:''}<p>${esc(repairExplanation(issue)||issue.detail||'No proven automatic correction is available. Review this finding in an EPUB editor or obtain a corrected copy.')}</p></article>`).join('')}</div>`:!blocked&&actions.length?'<p class="review-section-note">No unresolved findings are predicted by the built-in checks for the selected changes. The saved copy will still be rescanned.</p>':'';
+    if(pending||state.reviewError)$('repair-technical').classList.add('hidden');
+    if(pending){$('repair-plan-summary').innerHTML='<div class="busy-indicator" role="status"><span class="spinner"></span>Checking available repairs…</div>';$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
+    if(state.reviewError){$('repair-plan-summary').innerHTML=`<div class="repair-review-message error" role="alert"><strong>Could not prepare repairs</strong><p>${esc(state.reviewError)}</p><p>Correct your choice or refresh the review to try again.</p></div>`;$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
+    const needsLanguage=context.language&&state.reviewOptions.fixMetadata&&!state.reviewOptions.language;
+    const switchedOff=Object.entries(categories).some(([kind,available])=>available&&!state.reviewOptions[{links:'fixLinks',duplicate_ids:'fixDuplicateIds',document_markup:'fixDocumentMarkup',metadata:'fixMetadata'}[kind]]);
+    const heading=blocked?'This copy cannot be repaired automatically':actions.length?'Ready to save a repaired copy':needsLanguage?'Choose the book’s language':switchedOff?'Repairs are switched off':context.identity?'A book identifier is missing':context.scripts?'Optional change available':unresolved.length?'These problems need a manual fix':'Nothing to fix';
+    const help=blocked?'Try a fresh download or ask the book’s provider for a corrected copy.':actions.length?'We’ll apply the fixes below and check the new copy.':needsLanguage?'Confirm the language below to fix the missing or invalid book detail.':switchedOff?'Turn fixes back on in Advanced options to include them.':context.identity?'You can add one to a separate copy below.':context.scripts?'You can remove interactive features from a separate copy.':unresolved.length?'SpineGuard cannot repair them safely. See the next steps below.':'The current check found no problems that need a repair.';
+    $('repair-plan-summary').innerHTML=`<div class="repair-review-message${blocked?' error':''}"><strong>${esc(heading)}</strong><p>${esc(help)}</p></div>`;
+    const simpleActions=simpleRepairActions(actions);
+    $('repair-plan-actions').innerHTML=simpleActions.length?`<h3>Fixes to apply</h3><ul class="repair-simple-list">${simpleActions.map(label=>`<li><span>${icon('check')}</span>${esc(label)}</li>`).join('')}</ul>`:'';
+    const isChoice=issue=>!blocked&&issue.repairable===true&&((context.language&&/^METADATA_LANGUAGE(?:_INVALID)?$/.test(issue.code))||(context.identity&&issue.optionalRepair&&issue.code==='METADATA_IDENTIFIER')||(context.scripts&&['CONTENT_SCRIPT','CONTENT_EVENT_HANDLER','CONTENT_JAVASCRIPT_URL'].includes(issue.code)));
+    const manual=unresolved.filter(issue=>!isChoice(issue));
+    const groupedManual=new Map();
+    for(const issue of manual){const key=issue.code+'\x00'+(issue.title||'')+'\x00'+manualRepairHelp(issue);if(!groupedManual.has(key))groupedManual.set(key,{issue,count:0});groupedManual.get(key).count++;}
+    $('repair-plan-unresolved').innerHTML=manual.length&&!blocked?`<h3>Still needs attention <span class="neutral-badge">${number(manual.length)}</span></h3><div class="review-unresolved-list">${Array.from(groupedManual.values()).map(({issue,count})=>`<article class="review-unresolved"><strong>${esc(issue.title||'Book problem')}${count>1?` <span class="neutral-badge">${number(count)}</span>`:''}</strong><p>${esc(manualRepairHelp(issue))}</p></article>`).join('')}</div>`:'';
+    const details=actions.length?`<h3>Exact changes</h3><ul class="repair-plan-list">${actions.map(action=>`<li><strong>${esc(action.description||action.kind||'Repair')}</strong>${action.file?`<span class="issue-file">${esc(action.file)}</span>`:''}${action.requiresOptIn?`<span class="repair-count">Selected optional change</span>`:''}</li>`).join('')}</ul>`:'';
+    const remaining=unresolved.length?`<h3>Remaining findings (${number(unresolved.length)})</h3><div class="review-unresolved-list">${unresolved.map(issue=>`<article class="review-unresolved"><strong>${esc(issue.title||issue.code||'Finding')}</strong>${issue.file?`<span class="issue-file">${esc(issue.file)}</span>`:''}<p>${esc(repairExplanation(issue)||issue.detail||'No automatic correction is available.')}</p></article>`).join('')}</div>`:'';
+    $('repair-technical-content').innerHTML=`${blocked?`<p class="review-section-note">${esc(blocked)}</p>`:''}${plan?.report?.epubcheck?'<p class="review-section-note">Preview predictions cover built-in checks. EPUBCheck is run again on the saved copy.</p>':''}${details}${remaining}`;
+    $('repair-technical').classList.toggle('hidden',!details&&!remaining&&!blocked&&!detected&&!plan?.report?.epubcheck);
   }
   async function saveReviewedRepair(){
     const plan=state.repairPlan,path=state.reviewPath;
@@ -226,7 +291,8 @@
           <p>Your original file has not been changed. The repaired book was checked again.${outcome}</p>
         </div></div>
         <h3 class="result-section-title">What changed</h3>
-        <ul class="repair-changes">${(result.changes||[]).map(change=>`<li><span>${icon('check')}</span>${esc(change)}</li>`).join('')||'<li>No automatic changes were necessary.</li>'}</ul>
+        <ul class="repair-changes">${simpleRepairActions(plan.actions||[]).map(change=>`<li><span>${icon('check')}</span>${esc(change)}</li>`).join('')||'<li>No automatic changes were necessary.</li>'}</ul>
+        ${(result.changes||[]).length?`<details class="repair-disclosure"><summary>Technical details</summary><ul class="repair-changes">${result.changes.map(change=>`<li>${esc(change)}</li>`).join('')}</ul></details>`:''}
         <h3 class="result-section-title">Saved copy</h3>
         <div class="repair-path">${esc(result.outputPath)}</div>
         ${remaining?'<p class="detail-note repair-followup">Review the repaired copy’s findings in the library before sideloading.</p>':''}`;
@@ -266,14 +332,19 @@
     $('clear-button').addEventListener('click',()=>$('confirm-dialog').showModal());$('confirm-clear-button').addEventListener('click',async()=>{try{await api.ClearReports();state.reports=[];state.selected=null;state.filter='all';state.query='';$('search-input').value='';render();$('confirm-dialog').close();toast('Reports cleared. Your books are untouched.');}catch(error){toast(errorText(error),'error');}});
     $('reveal-repair-button').addEventListener('click',()=>reveal(state.repairedPath));
     $('repair-options').addEventListener('change',event=>{
+      if(event.target.id==='repair-language-select')return;
       for(const key of Object.keys(repairDefaults)){const field=$('repair-options').elements.namedItem(key);state.reviewOptions[key]=field.type==='checkbox'?field.checked:field.value.trim();}
       if(event.target.name==='language'){if(state.previewTimer)requestRepairPreview();}
       else requestRepairPreview();
     });
     $('repair-language').addEventListener('input',event=>{state.reviewOptions.language=event.target.value.trim();requestRepairPreview(300);});
+    $('repair-language-select').addEventListener('change',event=>{
+      if(event.target.value==='custom'){$('repair-custom-language').classList.remove('hidden');$('repair-language').focus();return;}
+      selectRepairLanguage(event.target.value);requestRepairPreview();
+    });
     $('use-detected-language').addEventListener('click',()=>{
       const language=state.reviewSuggestions.language;if(typeof language!=='string'||!language||!state.reviewOptions.fixMetadata||state.repairing)return;
-      $('repair-language').value=language;state.reviewOptions.language=language;requestRepairPreview();
+      selectRepairLanguage(language);requestRepairPreview();
     });
     $('refresh-repair-preview').addEventListener('click',()=>requestRepairPreview());
     $('save-repair-button').addEventListener('click',saveReviewedRepair);

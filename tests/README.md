@@ -18,8 +18,9 @@ browser installation step. Browser binaries and npm are not needed to build
 or run the desktop application.
 
 The suite covers importing, native-drop registration, progress and cancellation,
-repair previews and unresolved findings, explicit script-cleanup selection,
-metadata recovery defaults, language suggestions that require selection,
+repair previews and unresolved findings, issue-specific repair choices,
+collapsed advanced controls and technical details, explicit script-cleanup selection,
+metadata recovery defaults, named language choices and suggestions that require selection,
 debounced language entry and validation feedback, gated identifier generation,
 document-markup choices and optional entity normalization,
 source-hash binding and refresh after source changes, pending-option changes,

@@ -2,6 +2,16 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.2.1 simpler repair review
+
+- Repair review presents the selected book's available fixes in plain language and shows only relevant questions or optional changes.
+- Language choices use language names; detected suggestions still require confirmation. Optional removal of interactive features and creation of a missing identifier remain explicit choices.
+- Individual repair switches and optional character normalization move into collapsed Advanced options. File paths, full edit descriptions, and detailed remaining findings move into collapsed Technical details.
+- Changing a choice still invalidates the previous preview, and saving still requires the current source hash. The original is preserved and the saved copy is rescanned.
+- Go tests and `go vet` pass locally, and Windows portable and installer packages build successfully. Browser coverage includes 26 cases, with compact-window visual review in both themes. The language-only review fits at 980×680 without scrolling; mixed repairable/unrepairable findings and deselected fixes retain accurate next steps.
+- Platform CI runs the full browser suite and Windows x64 / universal Mac builds separately. Universal packaging verifies Intel and Apple Silicon slices and ad-hoc signatures; it does not establish interactive Intel runtime acceptance.
+- Windows signing, Mac Developer ID signing/notarization, interactive platform acceptance, and physical-reader acceptance remain separate gates.
+
 ## 1.2.0 additional checks and repairs
 
 - Added confirmed-language input and source-language suggestions, existing identifier/reference recovery, explicit missing-identifier generation, and package/NCX identifier consistency.
