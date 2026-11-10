@@ -37,10 +37,7 @@ jobs:
             arch: amd64
           - os: macos-15
             platform: macos
-            arch: arm64
-          - os: macos-15-intel
-            platform: macos
-            arch: amd64
+            arch: universal
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -65,7 +62,7 @@ jobs:
           ./scripts/build.ps1 -Installer
       - name: Build macOS
         if: runner.os == 'macOS'
-        run: bash scripts/build-macos.sh
+        run: bash scripts/build-macos.sh universal
       - name: Upload native application and CLI
         uses: actions/upload-artifact@v4
         with:

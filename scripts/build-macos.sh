@@ -9,9 +9,26 @@ fi
 go test ./...
 go vet ./...
 go run ./scripts/icon
-arch="$(go env GOARCH)"
+arch="${1:-$(go env GOARCH)}"
+case "$arch" in amd64|arm64|universal) ;; *) echo 'Choose amd64, arm64, or universal.' >&2; exit 1 ;; esac
+export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=13.0"
+export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=13.0"
 wails build -clean -platform "darwin/$arch" -trimpath
-go build -trimpath -ldflags '-s -w' -o build/bin/spineguard-cli ./cmd/spineguard-cli
+if [[ "$arch" == universal ]]; then
+  for slice in amd64 arm64; do
+    CGO_ENABLED=0 GOOS=darwin GOARCH="$slice" go build -trimpath -ldflags '-s -w' -o "build/bin/spineguard-cli-$slice" ./cmd/spineguard-cli
+  done
+  lipo -create -output build/bin/spineguard-cli build/bin/spineguard-cli-amd64 build/bin/spineguard-cli-arm64
+  rm -f build/bin/spineguard-cli-amd64 build/bin/spineguard-cli-arm64
+  lipo -verify_arch x86_64 arm64 build/bin/SpineGuard.app/Contents/MacOS/SpineGuard
+  lipo -verify_arch x86_64 arm64 build/bin/spineguard-cli
+else
+  CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o build/bin/spineguard-cli ./cmd/spineguard-cli
+fi
 codesign --force --deep --sign - build/bin/SpineGuard.app
+codesign --force --sign - build/bin/spineguard-cli
+codesign --verify --deep --strict build/bin/SpineGuard.app
+codesign --verify --strict build/bin/spineguard-cli
+build/bin/spineguard-cli version
 ditto -c -k --sequesterRsrc --keepParent build/bin/SpineGuard.app "build/bin/SpineGuard-macos-$arch.zip"
 echo "Built app bundle and ZIP in build/bin. Public distribution requires Developer ID signing and notarization."

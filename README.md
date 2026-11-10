@@ -87,7 +87,7 @@ Exit codes: **0** no errors detected, **1** book errors found, **2** usage/tool 
 Install **Go 1.26 or later**. Builds pin **Wails v2.17.0**; the scripts install it if missing. The interface is plain HTML/CSS/JavaScript, so this application's build has no Node/npm or frontend dependency-install step. Go dependencies and the Wails CLI require network access on a fresh development machine.
 
 - **Windows 10/11 x64:** Microsoft WebView2 Runtime is required to run the desktop app. If absent, the Windows build offers the official runtime download page and exits. Install **NSIS 3** only if building an installer.
-- **macOS:** Build on a Mac with Xcode Command Line Tools (`xcode-select --install`). The macOS script builds for the host's architecture: Apple Silicon `arm64` or Intel `amd64`. Use a current macOS development environment; older OS runtime compatibility requires its own testing.
+- **macOS:** Build on a Mac with Xcode Command Line Tools (`xcode-select --install`). The script defaults to the host's architecture. Pass `universal` to build one app and CLI containing both Intel and Apple Silicon slices. Packaged apps require macOS 13 or later; oldest-supported-OS runtime compatibility requires its own testing.
 
 See the [Wails v2 platform requirements](https://v2.wails.io/docs/gettingstarted/installation/) for the native toolchain.
 
@@ -103,9 +103,11 @@ macOS Terminal, from the checkout:
 
 ```sh
 bash scripts/build-macos.sh
+# One package for Intel and Apple Silicon (also used by CI):
+bash scripts/build-macos.sh universal
 ```
 
-Build outputs are in `build/bin`. Both scripts run Go tests and `go vet`, generate the app icons, and build the desktop application and CLI. The Mac script creates an app ZIP and applies an ad-hoc signature for local use. Public Mac distribution needs Developer ID signing and notarization; neither is implied by a successful build.
+Build outputs are in `build/bin`. Both scripts run Go tests and `go vet`, generate the app icons, and build the desktop application and CLI. The Mac script creates an app ZIP and verifies its ad-hoc signature. Universal builds verify both Mach-O slices; Go tests execute on the build host, and interactive runtime acceptance remains a separate check. Public Mac distribution needs Developer ID signing and notarization; neither is implied by a successful build.
 
 For engine-only development:
 
