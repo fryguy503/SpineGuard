@@ -14,7 +14,7 @@ import (
 )
 
 func TestExportJSONAndCSV(t *testing.T) {
-	reports := []Report{{Report: epub.Report{Path: "/books/sample.epub", Filename: "sample.epub", Title: "A title, with \"quotes\"\nand new lines", Author: "A. Writer", Language: "en", EPUBVersion: "3.0", Status: "warning", Warnings: 1, FileBytes: 1234, Stats: epub.Stats{Words: 750, EstimatedPages: 3, SourcePages: 42, ReadingMinutes: 3, Chapters: 2, Images: 1}}, EPUBCheck: &Validation{Status: "passed", Version: "5.4.0"}}}
+	reports := []Report{{Report: epub.Report{Path: "/books/sample.epub", Filename: "sample.epub", Title: "A title, with \"quotes\"\nand new lines", Author: "A. Writer", Language: "en", Series: "The Sequence", SeriesIndex: "1.5", EPUBVersion: "3.0", Status: "warning", Warnings: 1, FileBytes: 1234, Stats: epub.Stats{Words: 750, EstimatedPages: 3, SourcePages: 42, ReadingMinutes: 3, Chapters: 2, Images: 1}}, EPUBCheck: &Validation{Status: "passed", Version: "5.4.0"}}}
 	t.Run("JSON retains full reports", func(t *testing.T) {
 		var output bytes.Buffer
 		if err := Export(&output, "json", reports); err != nil {
@@ -28,7 +28,7 @@ func TestExportJSONAndCSV(t *testing.T) {
 		if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
 			t.Fatal(err)
 		}
-		if decoded.Application != "SpineGuard" || decoded.ExportedAt.IsZero() || len(decoded.Reports) != 1 || decoded.Reports[0].Title != reports[0].Title || decoded.Reports[0].Stats.Words != 750 || decoded.Reports[0].EPUBCheck.Status != "passed" {
+		if decoded.Application != "SpineGuard" || decoded.ExportedAt.IsZero() || len(decoded.Reports) != 1 || decoded.Reports[0].Title != reports[0].Title || decoded.Reports[0].Stats.Words != 750 || decoded.Reports[0].EPUBCheck.Status != "passed" || decoded.Reports[0].Series != "The Sequence" || decoded.Reports[0].SeriesIndex != "1.5" {
 			t.Fatalf("export lost report data: %+v", decoded)
 		}
 	})
@@ -45,7 +45,7 @@ func TestExportJSONAndCSV(t *testing.T) {
 		for i, name := range rows[0] {
 			values[name] = rows[1][i]
 		}
-		for key, want := range map[string]string{"Title": reports[0].Title, "Words": "750", "Estimated pages": "3", "Source page markers": "42", "File bytes": "1234", "EPUBCheck": "passed", "Path": reports[0].Path} {
+		for key, want := range map[string]string{"Title": reports[0].Title, "Words": "750", "Estimated pages": "3", "Source page markers": "42", "File bytes": "1234", "EPUBCheck": "passed", "Path": reports[0].Path, "Series": "The Sequence", "Series index": "1.5"} {
 			if values[key] != want {
 				t.Errorf("CSV %s = %q, want %q", key, values[key], want)
 			}
@@ -57,7 +57,7 @@ func TestCSVFormulaInjection(t *testing.T) {
 	for _, dangerous := range []string{"=1+1", "+SUM(A1)", "-10+1", "@SUM(A1)", "\t=CMD()", "\r=CMD()", "\n=CMD()"} {
 		t.Run(dangerous, func(t *testing.T) {
 			var output bytes.Buffer
-			reports := []Report{{Report: epub.Report{Title: dangerous, Author: dangerous, Filename: dangerous, Path: dangerous}}}
+			reports := []Report{{Report: epub.Report{Title: dangerous, Author: dangerous, Filename: dangerous, Path: dangerous, Series: dangerous, SeriesIndex: dangerous}}}
 			if err := Export(&output, "csv", reports); err != nil {
 				t.Fatal(err)
 			}
@@ -65,7 +65,7 @@ func TestCSVFormulaInjection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, i := range []int{0, 1, 2, len(rows[1]) - 1} {
+			for _, i := range []int{0, 1, 2, 16, 17, 18} {
 				if !strings.HasPrefix(rows[1][i], "'") {
 					t.Fatalf("unsafe CSV cell %q", rows[1][i])
 				}

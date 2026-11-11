@@ -4,7 +4,7 @@
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.2.1**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.3.0**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
@@ -15,6 +15,12 @@ Version **1.2.1**. Native builds target Windows x64 and macOS on Intel and Apple
 5. Export **JSON** for complete reports or **CSV** for a book/statistics summary. **Clear reports** removes SpineGuard's history without deleting books or repaired copies.
 
 Use **Rescan library** after upgrading to refresh saved findings and statistics. Version 1.1.0 corrects false duplicate-identifier warnings from HTML tree reconstruction and zero word counts caused by self-closing XHTML script elements. These corrections do not require modifying the book.
+
+Choose **Covers** to browse cover images, or **List** for a compact table. **Group by** collects books by author, series, or health; **Sort by** controls their order. Series order uses the sequence supplied in the EPUB. Books without series metadata appear under **No series**. View, grouping, and sorting choices are remembered on this computer. Covers are read locally as needed; a placeholder appears when no supported cover is available.
+
+For bulk repairs, choose **Select books**, select the books you want, and choose **Review selected**. You can also select all books in the current filtered view. The review shows which books have fixes available and which need individual attention. Choose **Choose folder & save copies** to pick one destination folder. Existing files are never replaced; matching filenames receive a numbered suffix. Each saved copy is checked again, and a problem with one book does not stop the others. Stopping a batch keeps copies that already completed.
+
+Bulk repair applies the default supported fixes. Language confirmation, creating a new identifier, and removing interactive features remain individual decisions; use **Review individually** for those books. Changing a source file after the preview requires another review before that book can be repaired.
 
 Version 1.2.0 adds language-tag checks, recovery of existing publication-identifier references, NCX identifier consistency, manifest-backed stylesheet and cover-path fixes, precise identifier dependency checks, empty-guide detection, SVG alignment checks, and offline support for standard character entities in recognized XHTML DTDs. Standard `&mdash;` and `&nbsp;` uses in those documents no longer require a book rewrite to pass the native check. Unknown/custom DTDs still require EPUBCheck.
 

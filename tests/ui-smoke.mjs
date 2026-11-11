@@ -157,6 +157,12 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
       harness.calls.push({ name, args });
       if (config.failures?.[name]) throw new Error(config.failures[name]);
     };
+    const bulkDefaults={fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
+    const bulkPlanFor=path=>{
+      const report=reports.find(book=>book.path===path);
+      const actions=report.issues.some(issue=>issue.repairable&&!issue.optionalRepair&&(issue.code.startsWith('MIMETYPE_')||issue.code==='ZIP_PREFIX'))?[{kind:'packaging',description:'Fix EPUB packaging.',count:1,requiresOptIn:false}]:[];
+      return {path,sourceSha256:harness.currentSHA,options:{...bulkDefaults},report,actions,unresolved:report.issues.filter(issue=>issue.severity!=='info'&&!(actions.length&&issue.repairable&&!issue.optionalRepair)),suggestions:{},blockedReason:'',...(config.bulkPlans?.[path]||{})};
+    };
     window.runtime = {
       EventsOn(name, handler) { handlers[name] = handler; },
       OnFileDrop(handler) { harness.drop = handler; },
@@ -164,7 +170,22 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.2.1', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.3.0', settings, reports, warning: config.startupWarning || '' };
+      },
+      async GetBookCover(path){
+        invoke('GetBookCover',[path]);
+        harness.coverRunning=(harness.coverRunning||0)+1;
+        harness.maxCoverRunning=Math.max(harness.maxCoverRunning||0,harness.coverRunning);
+        try{
+          if(config.coverDelay)await new Promise(resolve=>setTimeout(resolve,config.coverDelay));
+          if(config.coverFailures?.includes(path))throw new Error('The cover is unavailable.');
+          if(config.covers?.[path]==='sample'){
+            const canvas=document.createElement('canvas');canvas.width=120;canvas.height=180;
+            const ctx=canvas.getContext('2d');ctx.fillStyle='#287c6b';ctx.fillRect(0,0,120,180);ctx.fillStyle='#e8f4ed';ctx.font='16px sans-serif';ctx.fillText('SPINEGUARD',8,70);ctx.fillText('TEST BOOK',12,100);
+            return canvas.toDataURL('image/png');
+          }
+          return config.covers?.[path]||'';
+        }finally{harness.coverRunning--;}
       },
       async SelectFiles() {
         invoke('SelectFiles');
@@ -188,6 +209,42 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
         invoke('CancelScan');
         clearTimeout(harness.scanTimer);
         harness.resolveScan?.([]);
+        harness.bulkCancel?.();
+      },
+      async PreviewBulkRepair(paths){
+        invoke('PreviewBulkRepair',[paths]);harness.bulkRunning=true;
+        return new Promise(resolve=>{
+          let timer;
+          const finish=result=>{clearTimeout(timer);harness.bulkRunning=false;harness.bulkCancel=null;resolve(result);};
+          harness.bulkCancel=()=>finish({items:[],cancelled:true});
+          timer=setTimeout(()=>{
+            const items=paths.map(path=>({path,title:reports.find(book=>book.path===path)?.title||path,plan:bulkPlanFor(path),error:config.bulkPreviewErrors?.[path]||''}));
+            items.forEach((item,index)=>handlers['bulk:progress']?.({phase:'preview',path:item.path,index:index+1,total:paths.length,previewItem:item}));
+            finish({items,cancelled:false});
+          },config.bulkPreviewDelay??20);
+        });
+      },
+      async RepairBooks(requests){
+        invoke('RepairBooks',[requests]);
+        if(config.cancelBulkFolder)return {directory:'',items:[],cancelled:true};
+        const directory='/repaired';harness.bulkRunning=true;
+        const results=requests.map(({path,options},index)=>{
+          const report=reports.find(book=>book.path===path),error=config.bulkSaveErrors?.[path]||(options.expectedSha256!==harness.currentSHA?'The book changed since this review.':'');
+          if(error)return {path,status:'failed',error};
+          const outputPath=`${directory}/${index+1}-${report.filename.replace(/\.epub$/,'.repaired.epub')}`;
+          return {path,status:'saved',outputPath,changes:['Normalized EPUB packaging.'],report:{...report,path:outputPath,filename:outputPath.split('/').pop(),status:'healthy',errors:0,warnings:0,issues:[]}};
+        });
+        const completed=config.bulkSaveDelay?results.slice(0,1):[];
+        completed.forEach((item,index)=>handlers['bulk:progress']?.({phase:'repair',path:item.path,index:index+1,total:requests.length,item,report:item.report}));
+        return new Promise(resolve=>{
+          let timer;
+          const finish=result=>{clearTimeout(timer);harness.bulkRunning=false;harness.bulkCancel=null;resolve(result);};
+          harness.bulkCancel=()=>finish({directory,items:[...completed,...requests.slice(completed.length).map(({path})=>({path,status:'cancelled'}))],cancelled:true});
+          timer=setTimeout(()=>{
+            results.slice(completed.length).forEach((item,index)=>handlers['bulk:progress']?.({phase:'repair',path:item.path,index:index+completed.length+1,total:requests.length,item,report:item.report}));
+            finish({directory,items:results,cancelled:false});
+          },config.bulkSaveDelay??20);
+        });
       },
       async PreviewRepair(path,options) {
         invoke('PreviewRepair',[path,options]);
@@ -823,6 +880,216 @@ test('switching a supported fix off explains how to restore it instead of claimi
   await page.locator('[name=fixLinks]').check();
   await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
   assert.equal(await page.locator('#repair-plan-unresolved .review-unresolved').count(),0);
+});
+
+async function selectForBulk(page,titles){
+  await page.locator('#select-books-button').click();
+  for(const title of titles)await page.getByRole('checkbox',{name:`Select ${title}`,exact:true}).check();
+  await page.locator('#review-selected-books').click();
+  await page.locator('#bulk-repair-dialog').waitFor({state:'visible'});
+}
+
+test('cover view groups real series data in numeric order and remembers browsing choices',async t=>{
+  const books=[
+    {...cleanBook,path:'/books/volume-ten.epub',title:'Volume Ten',author:'Alex Writer',series:'Walking Trails',seriesIndex:'10'},
+    {...cleanBook,path:'/books/volume-two.epub',title:'Volume Two',author:'Alex Writer',series:'Walking Trails',seriesIndex:'2'},
+    {...cleanBook,path:'/books/standalone.epub',title:'Standalone',author:'Bea Writer',series:'',seriesIndex:''},
+  ];
+  const page=await openApp(t,{reports:books,covers:{'/books/volume-ten.epub':'sample','/books/volume-two.epub':'sample'},coverDelay:25});
+  await page.locator('#library-view-covers').click();
+  await page.locator('#library-group').selectOption('series');
+  await page.locator('#library-sort').selectOption('series');
+  assert.equal(await page.locator('#library-view-covers').getAttribute('aria-pressed'),'true');
+  const groups=await page.locator('.book-group-heading').allTextContents();
+  assert.ok(groups.some(text=>text.includes('Walking Trails')));
+  assert.ok(groups.some(text=>text.includes('No series')));
+  const titles=await page.locator('#book-rows .book-title').allTextContents();
+  assert.ok(titles.indexOf('Volume Two')<titles.indexOf('Volume Ten'),'Series position2 must precede10');
+  await page.locator('#book-rows img').first().waitFor({state:'visible'});
+  assert.equal(await callCount(page,'ScanPaths'),0,'Browsing covers must not rescan the library');
+  const coverConcurrency=await page.evaluate(()=>window.__testHarness.maxCoverRunning);
+  assert.ok(coverConcurrency>0&&coverConcurrency<=2,'Only two cover reads may run concurrently');
+  await screenshot(page,'cover-series');
+  await page.reload();
+  await page.locator('.preview-banner').waitFor();
+  assert.equal(await page.locator('#library-view-covers').getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('#library-group').inputValue(),'series');
+  assert.equal(await page.locator('#library-sort').inputValue(),'series');
+  await page.locator('#library-group').selectOption('author');
+  assert.match((await page.locator('.book-group-heading').allTextContents()).join(' '),/Alex Writer.*Bea Writer/s);
+});
+
+test('missing and hostile covers use placeholders and failed loads are not retried by ordinary rendering',async t=>{
+  const book={...cleanBook,path:'/books/no-cover.epub',coverData:'data:image/svg+xml,<svg onload="window.__xssExecuted=true"/>'};
+  const page=await openApp(t,{reports:[book],coverFailures:[book.path]});
+  await page.locator('#library-view-covers').click();
+  await page.waitForFunction(()=>window.__testHarness.calls.some(call=>call.name==='GetBookCover'));
+  await page.waitForTimeout(80);
+  await page.locator('#library-group').selectOption('author');
+  await page.locator('#library-sort').selectOption('title');
+  await page.locator('#library-view-list').click();
+  await page.locator('#library-view-covers').click();
+  await page.waitForTimeout(80);
+  assert.equal(await callCount(page,'GetBookCover'),1);
+  assert.equal(await page.locator('#book-rows img').count(),0);
+  assert.equal(await page.evaluate(()=>window.__xssExecuted),false);
+});
+
+test('bulk review repairs only selected ready books and preserves originals and individual decisions',async t=>{
+  const page=await openApp(t,{reports:[warningBook,metadataBook,cleanBook]});
+  await selectForBulk(page,[warningBook.title,metadataBook.title]);
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  const preview=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='PreviewBulkRepair'));
+  assert.deepEqual(preview.args[0].slice().sort(),[warningBook.path,metadataBook.path].sort());
+  assert.match(await page.locator('#bulk-items').innerText(),/Ready/);
+  assert.match(await page.locator('#bulk-items').innerText(),/individual/i);
+  assert.equal(await page.locator('#bulk-items input[type=checkbox]:checked').count(),1,'A missing-language book must not be silently included');
+  await screenshot(page,'bulk-review');
+  await page.locator('#bulk-save-button').click();
+  await page.getByText('Copies saved',{exact:true}).waitFor();
+  const save=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='RepairBooks'));
+  assert.equal(save.args[0].length,1);
+  assert.equal(save.args[0][0].path,warningBook.path);
+  assert.deepEqual(save.args[0][0].options,{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,expectedSha256:'a'.repeat(64)});
+  await waitForCount(page,4);
+  assert.match(await page.locator('#bulk-summary').innerText(),/1 saved/);
+  await screenshot(page,'bulk-results');
+});
+
+test('bulk preview cancellation unlocks controls without saving or losing queued drops',async t=>{
+  const page=await openApp(t,{reports:[warningBook],bulkPreviewDelay:30000});
+  await selectForBulk(page,[warningBook.title]);
+  assert.equal(await page.locator('#rescan-library-button').isDisabled(),true);
+  await page.evaluate(()=>window.__testHarness.drop(0,0,['/books/queued-after-bulk.epub']));
+  assert.equal(await callCount(page,'ScanPaths'),0);
+  await page.locator('#bulk-cancel-button').click();
+  await page.waitForFunction(()=>!window.__testHarness.bulkRunning);
+  assert.equal(await callCount(page,'RepairBooks'),0);
+  assert.equal(await page.locator('#bulk-save-button').isDisabled(),true);
+  await page.locator('#bulk-done-button').click();
+  await waitForCount(page,2);
+  assert.equal(await callCount(page,'ScanPaths'),1);
+});
+
+test('bulk saving keeps completed copies on cancellation and reports remaining books',async t=>{
+  const second={...warningBook,path:'/books/another.epub',filename:'another.epub',title:'Another Book'};
+  const page=await openApp(t,{reports:[warningBook,second],bulkSaveDelay:30000});
+  await selectForBulk(page,[warningBook.title,second.title]);
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  await page.locator('#bulk-save-button').click();
+  await page.waitForFunction(()=>window.__testHarness.calls.some(call=>call.name==='RepairBooks'));
+  await page.locator('#bulk-cancel-button').click();
+  await page.getByText('Saving stopped',{exact:true}).waitFor();
+  assert.match(await page.locator('#bulk-summary').innerText(),/1 saved.*1 not saved/s);
+  await waitForCount(page,3);
+  assert.match(await page.locator('#bulk-items').innerText(),/Saved.*Not saved/s);
+});
+
+test('bulk folder cancellation preserves the reviewed choices and per-item failures stay visible',async t=>{
+  const cancelled=await openApp(t,{reports:[warningBook],cancelBulkFolder:true});
+  await selectForBulk(cancelled,[warningBook.title]);
+  await cancelled.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  await cancelled.locator('#bulk-save-button').click();
+  await cancelled.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  assert.equal(await cancelled.locator('#bulk-repair-dialog').isVisible(),true);
+  assert.doesNotMatch(await cancelled.locator('#bulk-summary').innerText(),/Copies saved/);
+  await waitForCount(cancelled,1);
+  const second={...warningBook,path:'/books/changed.epub',filename:'changed.epub',title:'Changed Book'};
+  const page=await openApp(t,{reports:[warningBook,second],bulkSaveErrors:{[second.path]:'The book changed after the repair review.'}});
+  await selectForBulk(page,[warningBook.title,second.title]);
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  await page.locator('#bulk-save-button').click();
+  await page.getByText('Copies saved',{exact:true}).waitFor();
+  assert.match(await page.locator('#bulk-summary').innerText(),/1 saved.*1 failed/s);
+  assert.match(await page.locator('#bulk-items').innerText(),/book changed after the repair review/);
+  await waitForCount(page,3);
+});
+
+test('cover grouping selection and bulk review fit compact desktops in both themes',async t=>{
+  const page=await openApp(t,{reports:[warningBook,metadataBook,cleanBook],covers:{[warningBook.path]:'sample'}},{width:980,height:680});
+  await page.locator('#library-view-covers').click();
+  await page.locator('#library-group').selectOption('health');
+  await selectForBulk(page,[warningBook.title,metadataBook.title]);
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  for(const theme of ['dark','light']){
+    await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+    const fits=await page.locator('#bulk-repair-dialog').evaluate(el=>{const rect=el.getBoundingClientRect(),footer=el.querySelector('.modal-footer').getBoundingClientRect();return rect.top>=0&&rect.left>=0&&rect.bottom<=innerHeight&&rect.right<=innerWidth&&footer.bottom<=innerHeight;});
+    assert.equal(fits,true);
+    await screenshot(page,`bulk-980-${theme}`);
+  }
+  await page.locator('#bulk-done-button').click();
+  await assertFits(page);
+  await screenshot(page,'cover-grouped-980');
+});
+
+test('select visible respects filters and keeps selected books while browsing other groups',async t=>{
+  const second={...warningBook,path:'/books/other-warning.epub',filename:'other-warning.epub',title:'Other Warning',author:'Other Author'};
+  const page=await openApp(t,{reports:[warningBook,second,cleanBook]});
+  await page.locator('[data-filter=attention]').click();
+  await page.locator('#select-books-button').click();
+  await page.locator('#select-visible-books').click();
+  assert.equal(await page.locator('#selected-book-count').textContent(),'2 selected');
+  await page.locator('#search-input').fill('Other Warning');
+  await page.locator('#library-group').selectOption('author');
+  assert.equal(await page.locator('#book-rows input[type=checkbox]:checked').count(),1);
+  assert.equal(await page.locator('#selected-book-count').textContent(),'2 selected','Filtering must not silently lose a selected book');
+  await page.locator('#review-selected-books').click();
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  const preview=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='PreviewBulkRepair'));
+  assert.deepEqual(preview.args[0].slice().sort(),[warningBook.path,second.path].sort());
+  assert.ok(!preview.args[0].includes(cleanBook.path));
+});
+
+test('bulk individual review opens the language question without applying bulk choices',async t=>{
+  const page=await openApp(t,{reports:[metadataBook],missingLanguage:true,suggestions:{language:'en',languageSources:['title.xhtml']}});
+  await selectForBulk(page,[metadataBook.title]);
+  await page.waitForFunction(()=>document.getElementById('bulk-repair-dialog').getAttribute('aria-busy')==='false');
+  assert.equal(await page.locator('#bulk-save-button').isDisabled(),true);
+  await page.locator('[data-bulk-review-index]').click();
+  await page.locator('#repair-review-dialog').waitFor({state:'visible'});
+  await page.getByRole('button',{name:'Use English',exact:true}).waitFor();
+  await waitForReview(page);
+  assert.equal(await page.locator('#bulk-repair-dialog').isVisible(),false);
+  assert.equal(await page.locator('#repair-language-select').inputValue(),'');
+  assert.equal(await callCount(page,'RepairBooks'),0);
+  assert.equal(await callCount(page,'RepairBookWithOptions'),0);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+});
+
+test('bulk preview errors and invalid source hashes cannot produce saved copies',async t=>{
+  const failed=await openApp(t,{reports:[warningBook],failures:{PreviewBulkRepair:'The library folder is unavailable.'}});
+  await selectForBulk(failed,[warningBook.title]);
+  await failed.getByRole('alert').filter({hasText:'library folder is unavailable'}).waitFor();
+  assert.equal(await failed.locator('#bulk-save-button').isDisabled(),true);
+  await failed.locator('#bulk-done-button').click();
+  assert.equal(await failed.locator('#rescan-library-button').isDisabled(),false);
+  assert.equal(await callCount(failed,'RepairBooks'),0);
+  const page=await openApp(t,{reports:[warningBook],bulkPlans:{[warningBook.path]:{sourceSha256:'not-a-valid-hash',actions:[{kind:'packaging',description:'<img src=x onerror="window.__xssExecuted=true">',count:1}]}}});
+  await selectForBulk(page,[warningBook.title]);
+  await page.waitForFunction(()=>document.getElementById('bulk-repair-dialog').getAttribute('aria-busy')==='false');
+  assert.equal(await page.locator('#bulk-save-button').isDisabled(),true);
+  assert.equal(await page.locator('#bulk-items input[type=checkbox]:checked').count(),0);
+  assert.equal(await page.locator('#bulk-items img,#bulk-items script').count(),0);
+  assert.equal(await page.evaluate(()=>window.__xssExecuted),false);
+  assert.equal(await callCount(page,'RepairBooks'),0);
+});
+
+test('keyboard selection keeps focus when book and bulk checkboxes are toggled',async t=>{
+  const page=await openApp(t,{reports:[warningBook]});
+  await page.locator('#select-books-button').click();
+  const book=page.getByRole('checkbox',{name:`Select ${warningBook.title}`,exact:true});
+  await book.focus();await book.press('Space');
+  assert.equal(await book.isChecked(),true);
+  assert.equal(await book.evaluate(el=>el===document.activeElement),true,'Selecting a book must preserve keyboard focus');
+  await page.locator('#review-selected-books').click();
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  const include=page.getByRole('checkbox',{name:`Include ${warningBook.title}`,exact:true});
+  await include.focus();await include.press('Space');
+  assert.equal(await include.isChecked(),false);
+  assert.equal(await include.evaluate(el=>el===document.activeElement),true,'Changing a bulk selection must preserve keyboard focus');
+  assert.equal(await page.locator('#bulk-save-button').isDisabled(),true);
+  await include.press('Space');
+  assert.equal(await page.locator('#bulk-save-button').isDisabled(),false);
 });
 
 test('layout fits the minimum and standard desktop window in both themes', async t => {

@@ -28,6 +28,10 @@ formal-check errors, metadata escaping,
 search/filter, preferences and estimates, exports, error recovery, report
 clearing, whole-library rescans, keyboard shortcuts, and layout at 980×680 and
 1440×1000. Repair review is checked in both themes at the minimum window size.
+Cover/list views, remembered grouping and sorting, natural series order, bounded
+lazy cover reads, missing-cover placeholders, filtered selection, bulk review,
+default-only options and source hashes, individual-review handoff, cancellation,
+folder-picker cancellation, and partial failures are covered as well.
 It checks for JavaScript/console errors and unexpected network requests.
 
 Optional environment variables:

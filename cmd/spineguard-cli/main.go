@@ -25,7 +25,7 @@ func run(args []string) int {
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-version":
-		fmt.Println("SpineGuard 1.2.1")
+		fmt.Println("SpineGuard 1.3.0")
 		return 0
 	case "help", "--help", "-h":
 		usage()

@@ -30,7 +30,10 @@
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
   const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.2.1',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.3.0',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
+  const collator=new Intl.Collator('en',{numeric:true,sensitivity:'base'});
+  const coverAttempts=new Set(),coverQueued=new Set(),coverQueue=[];
+  let coverObserver=null,coverWorkers=0;
   const api = new Proxy({}, {get:(_,name)=>(...args)=>{
     const app=window.spineguardPreview || window.go?.main?.App;
     if(!app?.[name])return Promise.reject(new Error('The desktop connection is unavailable. Open SpineGuard from its application icon.'));
@@ -48,19 +51,25 @@
     const resolved=value==='system'?(window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):value;
     document.documentElement.dataset.theme=resolved==='light'?'light':'dark';
   }
+  function workBlocked(){return state.running||state.repairing||!!state.reviewPath||state.previewWorker||state.bulkOpen||state.bulkWorking;}
+  function loadLibraryPreferences(){
+    try{const saved=JSON.parse(localStorage.getItem('spineguard-library-view')||'{}');if(['list','covers'].includes(saved.view))state.view=saved.view;if(['none','author','series','health'].includes(saved.group))state.group=saved.group;if(['title','author','series','recent'].includes(saved.sort))state.sort=saved.sort;}catch{}
+  }
+  function saveLibraryPreferences(){try{localStorage.setItem('spineguard-library-view',JSON.stringify({view:state.view,group:state.group,sort:state.sort}));}catch{}}
   function setBusy(running){
     state.running=running;$('scan-progress').classList.toggle('hidden',!running);
-    for(const id of ['add-button','folder-button','empty-add-button','clear-button','rescan-library-button'])$(id).disabled=running||state.repairing||!!state.reviewPath||state.previewWorker;
+    for(const id of ['add-button','folder-button','empty-add-button','clear-button','rescan-library-button'])$(id).disabled=workBlocked();
     $('rescan-library-button').disabled=$('rescan-library-button').disabled||!state.reports.length;
     $('cancel-button').disabled=state.cancelling;$('cancel-button').textContent=state.cancelling?'Cancelling…':'Cancel scan';
-    $('export-button').disabled=!state.reports.length||running||state.repairing||!!state.reviewPath||state.previewWorker;
+    $('export-button').disabled=!state.reports.length||workBlocked();
+    $('settings-nav').disabled=workBlocked();
     if(running){$('progress-title').textContent='Checking your books…';$('progress-fill').style.width='0%';}
-    renderDetail();
+    renderSelection();renderDetail();if(!workBlocked())void pumpCovers();
   }
   function upsert(report){
     if(!report?.path)return;
     const index=state.reports.findIndex(book=>book.path===report.path);
-    if(index>=0)state.reports[index]=report;else state.reports.push(report);
+    if(index>=0){const previous=state.reports[index];if(!report.coverData&&previous.scannedAt===report.scannedAt)report={...report,coverData:previous.coverData};state.reports[index]=report;}else state.reports.push(report);
     if(!state.selected)state.selected=report.path;
   }
   function label(report){
@@ -78,36 +87,86 @@
       if(state.filter==='healthy'&&book.status!=='healthy')return false;
       if(state.filter==='attention'&&!hasAttention(book))return false;
       if(state.filter==='unreadable'&&book.status!=='unreadable')return false;
-      return !state.query||[book.title,book.author,book.filename].join(' ').toLocaleLowerCase().includes(state.query);
-    });
+      return !state.query||[book.title,book.author,book.series,book.seriesIndex,book.filename].join(' ').toLocaleLowerCase().includes(state.query);
+    }).sort(compareBooks);
   }
+  function textKey(value){return String(value||'').trim().replace(/\s+/g,' ').toLocaleLowerCase();}
+  function compareSeriesIndex(a,b){
+    const left=String(a||'').trim(),right=String(b||'').trim();if(!left||!right)return left?-1:right?1:0;
+    if(/^[+-]?\d+(?:\.\d+)?$/.test(left)&&/^[+-]?\d+(?:\.\d+)?$/.test(right)){const delta=Number(left)-Number(right);if(Number.isFinite(delta)&&delta)return delta;}
+    return collator.compare(left,right);
+  }
+  function compareBooks(a,b){
+    const title=()=>collator.compare(a.title||a.filename||'',b.title||b.filename||'');
+    if(state.sort==='author')return collator.compare(textKey(a.author),textKey(b.author))||title();
+    if(state.sort==='series'){const series=collator.compare(textKey(a.series)||'\uffff',textKey(b.series)||'\uffff');return series||compareSeriesIndex(a.seriesIndex,b.seriesIndex)||title();}
+    if(state.sort==='recent'){const delta=(Date.parse(b.scannedAt)||0)-(Date.parse(a.scannedAt)||0);return delta||state.reports.indexOf(a)-state.reports.indexOf(b);}
+    return title();
+  }
+  function groupedReports(books){
+    if(state.group==='none')return [{name:'',books}];
+    const groups=new Map();
+    for(const book of books){const raw=state.group==='author'?String(book.author||'').trim().replace(/\s+/g,' '):state.group==='series'?String(book.series||'').trim().replace(/\s+/g,' '):label(book);const name=raw||(state.group==='author'?'Unknown author':'No series'),key=state.group==='health'?book.status:textKey(raw)||'\uffff';if(!groups.has(key))groups.set(key,{name,books:[],key});groups.get(key).books.push(book);}
+    return Array.from(groups.values()).sort((a,b)=>state.group==='health'?(['error','unreadable','warning','healthy'].indexOf(a.key)-['error','unreadable','warning','healthy'].indexOf(b.key)):collator.compare(a.key,b.key));
+  }
+  function safeCoverData(value){return typeof value==='string'&&value.length<4000000&&/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/.test(value);}
   function cover(book,large=false){
     const seed=Array.from(book.title||book.filename||'S').reduce((n,c)=>n+c.codePointAt(0),0);
-    const safeCover=typeof book.coverData==='string'&&book.coverData.length<4000000&&/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=\s]+$/.test(book.coverData);
-    return `<span class="book-cover cover-tone-${seed%6}${large?' large':''}">${safeCover?`<img src="${esc(book.coverData)}" alt="Book cover">`:esc(Array.from(book.title||book.filename||'S')[0].toLocaleUpperCase())}</span>`;
+    return `<span class="book-cover cover-tone-${seed%6}${large?' large':''}" data-cover-path="${esc(book.path)}">${safeCoverData(book.coverData)?`<img src="${esc(book.coverData)}" alt="Book cover" loading="lazy" decoding="async">`:esc(Array.from(book.title||book.filename||'S')[0].toLocaleUpperCase())}</span>`;
+  }
+  function observeCovers(){
+    coverObserver?.disconnect();
+    if(!('IntersectionObserver' in window))return;
+    coverObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;coverObserver.unobserve(entry.target);const book=state.reports.find(book=>book.path===entry.target.dataset.coverPath);if(!book||safeCoverData(book.coverData))continue;const key=book.path+'\x00'+(book.scannedAt||'');if(coverAttempts.has(key)||coverQueued.has(key))continue;coverQueued.add(key);coverQueue.push({path:book.path,scannedAt:book.scannedAt,key});}void pumpCovers();},{rootMargin:'120px'});
+    document.querySelectorAll('.book-cover[data-cover-path]').forEach(element=>coverObserver.observe(element));
+  }
+  async function pumpCovers(){
+    while(coverWorkers<2&&coverQueue.length&&!workBlocked()){
+      const task=coverQueue.shift();coverQueued.delete(task.key);const book=state.reports.find(book=>book.path===task.path);
+      if(!book||book.scannedAt!==task.scannedAt||safeCoverData(book.coverData)||coverAttempts.has(task.key))continue;
+      coverAttempts.add(task.key);coverWorkers++;
+      void (async()=>{try{const data=await api.GetBookCover(task.path);const current=state.reports.find(book=>book.path===task.path);if(current&&current.scannedAt===task.scannedAt&&safeCoverData(data)){current.coverData=data;document.querySelectorAll('.book-cover[data-cover-path]').forEach(element=>{if(element.dataset.coverPath===task.path)element.innerHTML=`<img src="${esc(data)}" alt="Book cover" loading="lazy" decoding="async">`;});}}catch{}finally{coverWorkers--;void pumpCovers();}})();
+    }
+  }
+  function renderBook(book){
+    const index=state.reports.indexOf(book),selected=state.selectedBooks.has(book.path),isGrid=state.view==='covers';
+    return `<div class="book-entry${isGrid?' cover-entry':''}${selected?' included':''}">${state.selecting?`<label class="book-select"><input type="checkbox" data-select-book-index="${index}" aria-label="Select ${esc(book.title||book.filename)}" ${selected?'checked':''} ${workBlocked()?'disabled':''}></label>`:''}<button class="book-row${isGrid?' book-card':''}${book.path===state.selected?' selected':''}" data-book-index="${index}" aria-label="View ${esc(book.title||book.filename)}" aria-pressed="${book.path===state.selected}"><span class="book-summary">${cover(book)}<span class="book-title-text"><span class="book-title" title="${esc(book.title||book.filename)}">${esc(book.title||book.filename||'Untitled book')}</span><span class="book-author" title="${esc(book.author||book.filename)}">${esc(book.author||'Unknown author')}</span>${book.series?`<span class="book-series">${esc(book.series)}${book.seriesIndex?` · ${esc(book.seriesIndex)}`:''}</span>`:''}</span></span><span>${badge(book)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.words)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.estimatedPages)}</span></button></div>`;
+  }
+  function renderSelection(){
+    const busy=workBlocked();
+    if(!state.reports.length)state.selecting=false;
+    for(const path of state.selectedBooks)if(!state.reports.some(book=>book.path===path))state.selectedBooks.delete(path);
+    $('select-books-button').disabled=busy||!state.reports.length;$('select-books-button').setAttribute('aria-pressed',String(state.selecting));$('select-books-button').textContent=state.selecting?'Done selecting':'Select books';
+    $('book-selection-bar').classList.toggle('hidden',!state.selecting);$('selected-book-count').textContent=`${number(state.selectedBooks.size)} selected`;
+    $('select-visible-books').disabled=busy||!visibleReports().length;$('clear-selected-books').disabled=busy||!state.selectedBooks.size;$('review-selected-books').disabled=busy||!state.selectedBooks.size;
+    for(const id of ['library-view-list','library-view-covers','library-group','library-sort'])$(id).disabled=busy;
+    document.querySelectorAll('[data-select-book-index]').forEach(checkbox=>{checkbox.disabled=busy;});
   }
   function render(){
     state.reports.forEach(book=>{if(book.stats){book.stats.estimatedPages=estimatedPages(book);book.stats.readingMinutes=estimatedMinutes(book);}});
     const total=state.reports.length,healthy=state.reports.filter(b=>b.status==='healthy').length,attention=state.reports.filter(hasAttention).length,unreadable=state.reports.filter(b=>b.status==='unreadable').length;
     $('nav-count').textContent=number(total);$('total-books').textContent=number(total);$('healthy-books').textContent=number(healthy);$('attention-books').textContent=number(attention+unreadable);
     $('all-count').textContent=number(total);$('healthy-count').textContent=number(healthy);$('attention-count').textContent=number(attention);$('unreadable-count').textContent=number(unreadable);
-    $('empty-state').classList.toggle('hidden',total>0);$('export-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;$('clear-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;
+    $('empty-state').classList.toggle('hidden',total>0);$('export-button').disabled=!total||workBlocked();$('clear-button').disabled=!total||workBlocked();
     $('library-footer-text').textContent=total?`${number(total)} ${total===1?'book':'books'} · ${number(state.reports.reduce((sum,b)=>sum+Number(b.stats?.words||0),0))} words`:'Ready for your first book';
-    $('rescan-library-button').disabled=!total||state.running||state.repairing||!!state.reviewPath||state.previewWorker;
+    $('rescan-library-button').disabled=!total||workBlocked();$('library-display-bar').classList.toggle('hidden',!total);
     const visible=visibleReports();$('no-results').classList.toggle('hidden',!total||visible.length>0);
-    $('book-rows').innerHTML=visible.map(book=>`<button class="book-row${book.path===state.selected?' selected':''}" data-book-index="${state.reports.indexOf(book)}" aria-label="View ${esc(book.title||book.filename)}" aria-pressed="${book.path===state.selected}"><span class="book-summary">${cover(book)}<span class="book-title-text"><span class="book-title" title="${esc(book.title||book.filename)}">${esc(book.title||book.filename||'Untitled book')}</span><span class="book-author" title="${esc(book.author||book.filename)}">${esc(book.author||book.filename||'Unknown author')}</span></span></span><span>${badge(book)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.words)}</span><span class="row-number">${book.status==='unreadable'?'—':number(book.stats?.estimatedPages)}</span></button>`).join('');
+    $('book-rows').classList.toggle('cover-grid',state.view==='covers');$('book-table-head').classList.toggle('hidden',state.view==='covers');
+    $('book-rows').innerHTML=groupedReports(visible).map(group=>`${group.name?`<h3 class="book-group-heading">${esc(group.name)}<span>${number(group.books.length)}</span></h3>`:''}${group.books.map(renderBook).join('')}`).join('');
+    $('library-view-list').setAttribute('aria-pressed',String(state.view==='list'));$('library-view-covers').setAttribute('aria-pressed',String(state.view==='covers'));$('library-group').value=state.group;$('library-sort').value=state.sort;
     document.querySelectorAll('[data-filter]').forEach(button=>button.classList.toggle('active',button.dataset.filter===state.filter));
-    renderDetail();
+    renderSelection();renderDetail();observeCovers();
   }
   function renderDetail(){
     const panel=$('book-detail'),source=state.reports.find(item=>item.path===state.selected);
     const book=source?{...source,stats:{...source.stats,estimatedPages:estimatedPages(source),readingMinutes:estimatedMinutes(source)}}:undefined;
     if(!book){panel.classList.add('hidden');return;}
     panel.classList.remove('hidden');const stats=book.stats||{},issues=Array.isArray(book.issues)?book.issues:[];
-    const repairable=issues.some(issue=>issue.repairable),busy=state.running||state.repairing;
+    const repairable=issues.some(issue=>issue.repairable),busy=workBlocked();
     const healthCopy=book.status==='healthy'?'The checks that ran found no issues. Explore the book’s stats below.':book.status==='unreadable'?'This book could not be fully read. Review the findings before adding it to your reader.':`${number(book.errors)} ${book.errors===1?'error':'errors'} and ${number(book.warnings)} ${book.warnings===1?'warning':'warnings'} found.${repairable?' Some findings have a repair available.':' Review the findings below for next steps.'}`;
     const epubcheck=book.epubcheck;
     panel.innerHTML=`<div class="detail-kicker">BOOK INSPECTOR<button class="icon-button" data-detail-action="close" aria-label="Close book inspector">${icon('close')}</button></div><div class="detail-hero">${cover(book,true)}<div><h2>${esc(book.title||book.filename||'Untitled book')}</h2><p class="detail-author">${esc(book.author||'Unknown author')}</p><div class="book-tags"><span class="neutral-badge">EPUB ${esc(book.epubVersion||'?')}</span>${book.language?`<span class="neutral-badge">${esc(book.language.toLocaleUpperCase())}</span>`:''}<span class="neutral-badge">${esc(bytes(book.fileBytes))}</span></div></div></div><div class="health-summary ${esc(book.status)}">${badge(book)}<p>${esc(healthCopy)}</p></div>${epubcheck?`<div class="epubcheck-result"><strong>EPUBCheck · ${esc(epubcheck.status||'Not run')}${epubcheck.version?` · ${esc(epubcheck.version)}`:''}</strong>${esc(epubcheck.detail||'Formal standards validation.')}</div>`:''}<div class="detail-stats"><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.words)}</strong><span>Words in reading order</span></div><div class="detail-stat"><strong>${book.status==='unreadable'?'—':number(stats.estimatedPages)}</strong><span>Estimated pages</span></div><div class="detail-stat"><strong>${number(stats.chapters)}</strong><span>Reading-order documents</span></div><div class="detail-stat"><strong>${readingTime(stats.readingMinutes)}</strong><span>Estimated reading time</span></div></div><p class="estimate-note">${number(state.settings.wordsPerPage)} words per estimated page · ${stats.sourcePages?`${number(stats.sourcePages)} source page markers`:'No source page markers supplied'}</p><div class="detail-actions"><button class="button ${repairable?'primary':'secondary'}" data-detail-action="repair" ${busy||!issues.length?'disabled':''} title="${issues.length?'Review proposed repairs and reader cleanup':'No repairs needed: no findings were detected'}">${state.repairing?'<span class="spinner"></span>':icon('wrench')}${state.repairing?'Repairing…':'Review repairs'}</button><button class="button secondary" data-detail-action="rescan" ${busy?'disabled':''}>${icon('refresh')}Rescan</button><button class="icon-button" data-detail-action="reveal" title="Show original file" aria-label="Show original file">${icon('folder')}</button></div>${issues.length?'<p class="detail-note">Review changes before saving a separate copy. Your original is preserved.</p>':''}<div class="issue-heading"><h3>Findings</h3><div class="issue-counts"><span class="errors">${number(book.errors)} errors</span><span class="warnings">${number(book.warnings)} warnings</span></div></div><div class="issue-list">${issues.length?issues.slice().sort((a,b)=>({error:0,warning:1,info:2}[a.severity]??3)-({error:0,warning:1,info:2}[b.severity]??3)).map(issue=>`<article class="issue ${esc(issue.severity)}"><div class="issue-top"><span class="issue-icon">${icon(issue.severity==='error'?'error':issue.severity==='warning'?'alert':'info')}</span><h4>${esc(issue.title||issue.code)}</h4></div>${issue.detail?`<p>${esc(issue.detail)}</p>`:''}${issue.file?`<span class="issue-file">${esc(issue.file)}${issue.line?`:${number(issue.line)}`:''}</span>`:''}${repairExplanation(issue)?`<p class="repair-explanation">${esc(repairExplanation(issue))}</p>`:''}<div class="issue-meta"><span>${esc(issue.code||issue.severity)}</span>${issue.repairable?`<span class="repairable">${icon('wrench')}${issue.optionalRepair?(issue.repairKind==='reader_cleanup'||issue.code==='CONTENT_SCRIPT'?'Optional reader cleanup':'Optional repair'):'Repair available'}</span>`:''}</div></article>`).join(''):`<div class="no-issues"><span>${icon('check-circle')}</span>No findings from the checks that ran.</div>`}</div><details class="metadata-disclosure"><summary>File & publication details</summary><dl class="metadata-grid"><dt>File</dt><dd>${esc(book.filename)}</dd><dt>Location</dt><dd>${esc(book.path)}</dd><dt>Identifier</dt><dd>${esc(book.identifier||'Not supplied')}</dd><dt>Images / fonts</dt><dd>${number(stats.images)} / ${number(stats.fonts)}</dd><dt>Archive entries</dt><dd>${number(stats.files)}</dd><dt>Expanded size</dt><dd>${esc(bytes(stats.uncompressedBytes))}</dd><dt>Largest chapter</dt><dd>${esc(bytes(stats.largestChapterBytes))}</dd><dt>Last checked</dt><dd>${formatDate(book.scannedAt)}</dd><dt>Scan time</dt><dd>${number(book.durationMs)} ms</dd></dl></details>`;
+    if(book.series){const series=document.createElement('p');series.className='detail-series';series.textContent=book.series+(book.seriesIndex?' · '+book.seriesIndex:'');panel.querySelector('.detail-author').after(series);}
   }
   function repairExplanation(issue){
     if(issue.repairReason)return issue.repairReason;
@@ -126,17 +185,17 @@
 
   async function scan(paths){
     paths=(Array.isArray(paths)?paths:[]).filter(path=>typeof path==='string'&&path.trim());if(!paths.length)return;
-    if(state.running||state.repairing||state.reviewPath||state.previewWorker){state.queued.push(...paths);toast('Added to the queue. These books will be checked after the current task.');return;}
+    if(workBlocked()){state.queued.push(...paths);toast('Added to the queue. These books will be checked after the current task.');return;}
     state.cancelling=false;state.progress={index:0,total:0};setBusy(true);$('progress-path').textContent=paths.length===1?paths[0]:`${number(paths.length)} selected paths`;
     try{const reports=await api.ScanPaths(paths);if(Array.isArray(reports))reports.forEach(upsert);render();if(!state.cancelling)toast(reports?.length?`Checked ${number(reports.length)} ${reports.length===1?'book':'books'}.`:'No EPUB files were found in the selected location.');else toast('Scan stopped. Completed results are in your library.');}
     catch(error){toast(errorText(error),'error',10000);}
     finally{state.cancelling=false;setBusy(false);render();drainQueue();}
   }
-  function drainQueue(){if(!state.running&&!state.repairing&&!state.reviewPath&&!state.previewWorker&&state.queued.length){const queued=[...new Set(state.queued)];state.queued=[];void scan(queued);}}
+  function drainQueue(){if(!workBlocked()&&state.queued.length){const queued=[...new Set(state.queued)];state.queued=[];void scan(queued);}}
   async function chooseFiles(){try{const paths=await api.SelectFiles();if(paths?.length)await scan(paths);}catch(error){toast(errorText(error),'error');}}
   async function chooseFolder(){try{const path=await api.SelectFolder();if(path)await scan([path]);}catch(error){toast(errorText(error),'error');}}
   function repair(){
-    const book=state.reports.find(item=>item.path===state.selected);if(!book||state.running||state.repairing)return;
+    const book=state.reports.find(item=>item.path===state.selected);if(!book||workBlocked())return;
     state.reviewPath=book.path;state.repairPlan=null;state.reviewError='';
     state.reviewOptions={...repairDefaults};state.reviewSuggestions={};state.reviewReport=null;state.reviewSHA='';state.reviewKinds=new Set();
     for(const [key,value]of Object.entries(state.reviewOptions)){const field=$('repair-options').elements.namedItem(key);if(field.type==='checkbox')field.checked=value;else field.value=value;}
@@ -301,6 +360,79 @@
     catch(error){state.reviewError=errorText(error);state.repairPlan=null;}
     finally{state.repairing=false;setBusy(false);render();if(state.reviewPath)renderRepairReview();drainQueue();}
   }
+  function bulkReady(item){return !item?.error&&!item?.unreviewed&&!item?.plan?.blockedReason&&Array.isArray(item?.plan?.actions)&&item.plan.actions.length>0&&/^[a-f0-9]{64}$/i.test(item.plan.sourceSha256||'');}
+  function bulkStatus(item){
+    if(item.unreviewed)return 'Not checked';
+    if(item.error)return 'Could not check';
+    if(item.plan?.blockedReason)return 'Cannot repair';
+    if(bulkReady(item))return 'Ready';
+    return item.plan?.report?.issues?.some(issue=>issue.severity!=='info')?'Needs individual review':'No repairs needed';
+  }
+  function renderBulk(){
+    const working=state.bulkWorking,result=state.bulkResult;
+    $('bulk-repair-dialog').setAttribute('aria-busy',String(working));
+    $('bulk-close-button').disabled=working;$('bulk-done-button').disabled=working;
+    $('bulk-progress').classList.toggle('hidden',!working);
+    $('bulk-cancel-button').classList.toggle('hidden',!working);$('bulk-cancel-button').disabled=state.bulkCancelling;
+    $('bulk-cancel-button').textContent=state.bulkCancelling?'Stopping…':state.bulkPhase==='repair'?'Stop saving':'Stop review';
+    $('bulk-save-button').classList.toggle('hidden',!!result);$('bulk-save-button').disabled=working||!!state.bulkError||!state.bulkItems.some(item=>bulkReady(item)&&state.bulkIncluded.has(item.path));
+    const retryPaths=result?.items?.filter(item=>item.status!=='saved').map(item=>item.path)||[];
+    $('bulk-refresh-button').classList.toggle('hidden',working||!(state.bulkError||state.bulkCancelled||retryPaths.length));
+    $('bulk-refresh-button').textContent=result?'Review remaining':'Review again';
+    const progress=state.bulkProgress,total=Number(progress.total||state.bulkPaths.length),index=Math.min(Number(progress.index||0),total);
+    $('bulk-progress-title').textContent=state.bulkPhase==='repair'?`Saving copies · ${number(index)} of ${number(total)}`:`Reviewing books · ${number(index)} of ${number(total)}`;
+    $('bulk-progress-path').textContent=state.reports.find(book=>book.path===progress.path)?.title||progress.path||'';
+    if(result){
+      const items=Array.isArray(result.items)?result.items:[],saved=items.filter(item=>item.status==='saved'),failed=items.filter(item=>item.status==='failed'),cancelled=items.filter(item=>item.status==='cancelled');
+      $('bulk-summary').innerHTML=`<div class="repair-review-message"><strong>${result.cancelled?'Saving stopped':'Copies saved'}</strong><p>${number(saved.length)} saved · ${number(failed.length)} failed · ${number(cancelled.length)} not saved. Your original books are unchanged.</p>${saved.length?'<button class="button secondary small" data-bulk-reveal-first>Show saved copies</button>':''}</div>`;
+      $('bulk-items').innerHTML=items.map((item,index)=>{const book=state.reports.find(book=>book.path===item.path),remaining=Number(item.report?.errors||0)+Number(item.report?.warnings||0);return `<article class="bulk-book-item"><div class="bulk-book-title"><strong>${esc(book?.title||book?.filename||item.path)}</strong><span class="bulk-status ${item.status==='saved'?'ready':''}">${item.status==='saved'?'Saved':item.status==='failed'?'Failed':'Not saved'}</span></div><p>${item.status==='saved'?(remaining?`${number(remaining)} ${remaining===1?'finding remains':'findings remain'} in the repaired copy.`:'No issues detected by the checks that ran.'):esc(item.error||(item.status==='cancelled'?'Stopped before this copy was saved.':'This copy could not be saved.'))}</p>${item.outputPath?`<button class="button ghost small" data-bulk-reveal-index="${index}">Show file</button>`:''}</article>`;}).join('');
+      return;
+    }
+    const ready=state.bulkItems.filter(bulkReady),included=ready.filter(item=>state.bulkIncluded.has(item.path)).length,skipped=state.bulkPaths.length-ready.length;
+    $('bulk-summary').innerHTML=state.bulkError?`<div class="repair-review-message error" role="alert"><strong>Could not complete bulk repair</strong><p>${esc(state.bulkError)}</p><p>Review the books again before retrying.</p></div>`:working?'<p class="review-section-note">Checking each book for available fixes. Nothing is saved during this review.</p>':`<div class="repair-review-message"><strong>${state.bulkCancelled?'Review stopped':`${number(included)} ${included===1?'book':'books'} selected for repair`}</strong><p>${skipped?`${number(skipped)} ${skipped===1?'book needs':'books need'} no automatic repair or a separate review. `:''}Only the selected fixes will be applied. Language choices and optional cleanup stay in each book’s individual review.</p></div>`;
+    $('bulk-items').innerHTML=state.bulkItems.map((item,index)=>{const ready=bulkReady(item),status=bulkStatus(item),book=state.reports.find(book=>book.path===item.path),title=item.title||book?.title||book?.filename||item.path,fixes=ready?simpleRepairActions(item.plan.actions):[],remaining=(item.plan?.unresolved||[]).filter(issue=>issue.severity!=='info').length;
+      const reason=item.unreviewed?'This book was not checked. Review again to include it.':item.error||item.plan?.blockedReason||(ready?(remaining?'Some findings will remain for individual review.':'The repaired copy will be checked again.'):status==='No repairs needed'?'No supported changes are needed.':'Confirm missing details or review the remaining findings for this book.');
+      return `<article class="bulk-book-item"><div class="bulk-book-title"><label class="bulk-include"><input type="checkbox" data-bulk-index="${index}" aria-label="Include ${esc(title)}" ${ready&&state.bulkIncluded.has(item.path)?'checked':''} ${!ready||working?'disabled':''}><strong>${esc(title)}</strong></label><span class="bulk-status ${ready?'ready':''}">${esc(status)}</span></div>${fixes.length?`<ul class="bulk-fixes">${fixes.map(fix=>`<li>${esc(fix)}</li>`).join('')}</ul>`:''}<p>${esc(reason)}</p>${status!=='No repairs needed'?`<button class="button ghost small" data-bulk-review-index="${index}" ${working?'disabled':''}>Review individually</button>`:''}</article>`;
+    }).join('');
+  }
+  async function previewBulk(paths){
+    if(state.bulkWorking)return;
+    state.bulkPaths=[...new Set(paths)];state.bulkItems=[];state.bulkIncluded=new Set();state.bulkResult=null;state.bulkError='';state.bulkCancelled=false;state.bulkCancelling=false;state.bulkWorking=true;state.bulkPhase='preview';state.bulkProgress={index:0,total:state.bulkPaths.length};
+    setBusy(false);renderBulk();
+    try{
+      const result=await api.PreviewBulkRepair(state.bulkPaths);
+      if(!result||!Array.isArray(result.items))throw new Error('The bulk review was incomplete. Review the books again.');
+      const seen=new Set();
+      state.bulkItems=result.items.filter(item=>item&&state.bulkPaths.includes(item.path)&&!seen.has(item.path)&&(seen.add(item.path)||true));
+      for(const path of state.bulkPaths)if(!seen.has(path)){const book=state.reports.find(book=>book.path===path);state.bulkItems.push({path,title:book?.title||book?.filename||path,unreviewed:true});}
+      state.bulkCancelled=!!result.cancelled;
+      for(const item of state.bulkItems){if(item.plan?.report?.path)upsert(item.plan.report);if(bulkReady(item))state.bulkIncluded.add(item.path);}
+    }catch(error){state.bulkError=errorText(error);state.bulkItems=[];state.bulkIncluded.clear();}
+    finally{state.bulkWorking=false;state.bulkCancelling=false;setBusy(false);render();renderBulk();}
+  }
+  function startBulk(){
+    if(workBlocked()||!state.selectedBooks.size)return;
+    const paths=state.reports.filter(book=>state.selectedBooks.has(book.path)).map(book=>book.path);if(!paths.length)return;
+    state.bulkOpen=true;$('bulk-repair-dialog').showModal();void previewBulk(paths);
+  }
+  async function saveBulk(){
+    if(state.bulkWorking||state.bulkError||state.bulkResult)return;
+    const items=state.bulkItems.filter(item=>bulkReady(item)&&state.bulkIncluded.has(item.path)).map(item=>({path:item.path,options:{...repairDefaults,expectedSha256:item.plan.sourceSha256}}));if(!items.length)return;
+    state.bulkWorking=true;state.bulkPhase='repair';state.bulkCancelling=false;state.bulkProgress={index:0,total:items.length};setBusy(false);renderBulk();
+    try{
+      const result=await api.RepairBooks(items);
+      if(!result||!Array.isArray(result.items))throw new Error('The bulk repair result was incomplete. Review the books again.');
+      // Cancelling the native folder picker leaves this reviewed selection available.
+      if(!result.directory&&!result.items.length)return;
+      state.bulkResult=result;state.bulkCancelled=!!result.cancelled;
+      for(const item of result.items)if(item.status==='saved'){if(item.report?.path)upsert(item.report);state.selectedBooks.delete(item.path);}
+    }catch(error){state.bulkError=errorText(error);state.bulkIncluded.clear();}
+    finally{state.bulkWorking=false;state.bulkCancelling=false;setBusy(false);render();renderBulk();}
+  }
+  async function stopBulk(){
+    if(!state.bulkWorking||state.bulkCancelling)return;state.bulkCancelling=true;renderBulk();
+    try{await api.CancelScan();}catch(error){state.bulkCancelling=false;toast(errorText(error),'error');renderBulk();}
+  }
   function openSettings(){
     const form=$('settings-form');for(const [key,value]of Object.entries({...defaults,...state.settings})){const field=form.elements.namedItem(key);if(!field)continue;if(field.type==='checkbox')field.checked=!!value;else field.value=value??'';}$('settings-dialog').showModal();
   }
@@ -316,7 +448,15 @@
 
   function wireEvents(){
     $('add-button').addEventListener('click',chooseFiles);$('empty-add-button').addEventListener('click',chooseFiles);$('folder-button').addEventListener('click',chooseFolder);
-    $('rescan-library-button').addEventListener('click',()=>{if(!state.running&&!state.repairing&&!state.reviewPath)void scan(state.reports.map(book=>book.path));});
+    $('rescan-library-button').addEventListener('click',()=>{if(!workBlocked())void scan(state.reports.map(book=>book.path));});
+    for(const view of ['list','covers'])$(`library-view-${view}`).addEventListener('click',()=>{if(workBlocked())return;state.view=view;saveLibraryPreferences();render();});
+    $('library-group').addEventListener('change',event=>{state.group=event.target.value;if(state.group==='series')state.sort='series';saveLibraryPreferences();render();});
+    $('library-sort').addEventListener('change',event=>{state.sort=event.target.value;saveLibraryPreferences();render();});
+    $('select-books-button').addEventListener('click',()=>{if(workBlocked())return;state.selecting=!state.selecting;render();});
+    $('select-visible-books').addEventListener('click',()=>{if(workBlocked())return;visibleReports().forEach(book=>state.selectedBooks.add(book.path));render();});
+    $('clear-selected-books').addEventListener('click',()=>{if(workBlocked())return;state.selectedBooks.clear();render();});
+    $('review-selected-books').addEventListener('click',startBulk);
+    $('book-rows').addEventListener('change',event=>{const checkbox=event.target.closest('[data-select-book-index]');if(!checkbox||workBlocked())return;const book=state.reports[Number(checkbox.dataset.selectBookIndex)];if(!book)return;if(checkbox.checked)state.selectedBooks.add(book.path);else state.selectedBooks.delete(book.path);checkbox.closest('.book-entry').classList.toggle('included',checkbox.checked);renderSelection();});
     $('settings-nav').addEventListener('click',openSettings);$('help-button').addEventListener('click',()=>$('help-dialog').showModal());$('library-nav').addEventListener('click',()=>{state.filter='all';state.query='';$('search-input').value='';render();});
     $('settings-form').addEventListener('submit',saveSettings);
     $('browse-epubcheck').addEventListener('click',async()=>{try{const path=await api.SelectEPUBCheck();if(path)$('settings-form').elements.epubcheckJar.value=path;}catch(error){toast(errorText(error),'error');}});
@@ -350,6 +490,17 @@
     $('save-repair-button').addEventListener('click',saveReviewedRepair);
     $('repair-review-dialog').addEventListener('cancel',event=>{if(state.repairing)event.preventDefault();});
     $('repair-review-dialog').addEventListener('close',()=>{clearTimeout(state.previewTimer);state.previewTimer=null;state.reviewPath='';state.repairPlan=null;state.reviewError='';state.reviewSuggestions={};state.previewing=false;state.reviewGeneration++;setBusy(false);render();drainQueue();});
+    $('bulk-save-button').addEventListener('click',saveBulk);$('bulk-cancel-button').addEventListener('click',stopBulk);
+    for(const id of ['bulk-close-button','bulk-done-button'])$(id).addEventListener('click',()=>{if(!state.bulkWorking)$('bulk-repair-dialog').close();});
+    $('bulk-repair-dialog').addEventListener('cancel',event=>{if(state.bulkWorking)event.preventDefault();});
+    $('bulk-repair-dialog').addEventListener('close',()=>{state.bulkOpen=false;state.bulkIncluded.clear();state.bulkError='';state.bulkResult=null;setBusy(false);render();drainQueue();});
+    $('bulk-refresh-button').addEventListener('click',()=>{const paths=state.bulkResult?state.bulkResult.items.filter(item=>item.status!=='saved').map(item=>item.path):state.bulkPaths;void previewBulk(paths);});
+    $('bulk-items').addEventListener('change',event=>{const checkbox=event.target.closest('[data-bulk-index]');if(!checkbox||state.bulkWorking)return;const item=state.bulkItems[Number(checkbox.dataset.bulkIndex)];if(!bulkReady(item))return;const focused=document.activeElement===checkbox,path=item.path;if(checkbox.checked)state.bulkIncluded.add(path);else state.bulkIncluded.delete(path);renderBulk();if(focused){const index=state.bulkItems.findIndex(entry=>entry.path===path),replacement=$('bulk-items').querySelector(`[data-bulk-index="${index}"]`);if(replacement&&!replacement.disabled)replacement.focus({preventScroll:true});}});
+    $('bulk-items').addEventListener('click',event=>{
+      const individual=event.target.closest('[data-bulk-review-index]');if(individual&&!state.bulkWorking){const item=state.bulkItems[Number(individual.dataset.bulkReviewIndex)];if(!item)return;$('bulk-repair-dialog').close();state.bulkOpen=false;state.selected=item.path;render();repair();return;}
+      const revealButton=event.target.closest('[data-bulk-reveal-index]');if(revealButton){const item=state.bulkResult?.items?.[Number(revealButton.dataset.bulkRevealIndex)];if(item?.outputPath)void reveal(item.outputPath);}
+    });
+    $('bulk-summary').addEventListener('click',event=>{if(event.target.closest('[data-bulk-reveal-first]')){const first=state.bulkResult?.items?.find(item=>item.status==='saved'&&item.outputPath);if(first)void reveal(first.outputPath);}});
     document.addEventListener('keydown',event=>{const editing=/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);if((event.ctrlKey||event.metaKey)&&event.key.toLocaleLowerCase()==='o'){event.preventDefault();if(!state.running&&!state.repairing&&!document.querySelector('dialog[open]'))void chooseFiles();}else if(event.key==='/'&&!editing&&!document.querySelector('dialog[open]')){event.preventDefault();$('search-input').focus();}else if(event.key==='Escape'){$('export-menu').classList.add('hidden');$('drop-overlay').classList.add('hidden');}});
     let dragDepth=0;document.addEventListener('dragenter',event=>{if(event.dataTransfer?.types?.includes('Files')){event.preventDefault();dragDepth++;$('drop-overlay').classList.remove('hidden');}});document.addEventListener('dragleave',()=>{dragDepth=Math.max(0,dragDepth-1);if(!dragDepth)$('drop-overlay').classList.add('hidden');});document.addEventListener('dragover',event=>{event.preventDefault();});document.addEventListener('drop',event=>{event.preventDefault();dragDepth=0;$('drop-overlay').classList.add('hidden');});window.addEventListener('blur',()=>{dragDepth=0;$('drop-overlay').classList.add('hidden');});
     window.matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>{if(state.settings.theme==='system')setTheme('system');});
@@ -359,17 +510,18 @@
     if(!runtime)return;
     runtime.EventsOn?.('scan:progress',progress=>{if(progress?.report)upsert(progress.report);state.progress=progress||{};if(progress?.total){$('progress-title').textContent=`Checking book ${number(Math.min(progress.index||1,progress.total))} of ${number(progress.total)}`;$('progress-fill').style.width=`${Math.min(100,Math.max(0,((progress.index||0)/progress.total)*100))}%`;}$('progress-path').textContent=progress?.path||'';render();});
     runtime.EventsOn?.('scan:state',event=>{if(event?.running&&!state.running)setBusy(true);});
+    runtime.EventsOn?.('bulk:progress',progress=>{if(!state.bulkOpen||!state.bulkWorking)return;state.bulkProgress=progress||{};if(progress?.report)upsert(progress.report);const item=progress?.previewItem;if(item?.path&&state.bulkPhase==='preview'){const index=state.bulkItems.findIndex(entry=>entry.path===item.path);if(index>=0)state.bulkItems[index]=item;else state.bulkItems.push(item);}renderBulk();});
     runtime.OnFileDrop?.((_x,_y,paths)=>{ $('drop-overlay').classList.add('hidden');void scan(paths);},true);
     runtime.EventsOn?.('app:open',paths=>{if(Array.isArray(paths))void scan(paths);});
     runtime.EventsOn?.('app:warning',message=>{if(message)toast(typeof message==='string'?message:(message.detail||message.message||'The library could not be saved.'),'error',14000);});
   }
   async function init(){
-    hydrateIcons();wireEvents();wireRuntime();render();
+    loadLibraryPreferences();hydrateIcons();wireEvents();wireRuntime();render();
     $('settings-form').elements.wordsPerPage.min='100';
     $('settings-form').elements.readingWPM.min='80';
     if(/Mac/i.test(navigator.platform))$('open-shortcut').textContent='⌘ O';
     if(window.spineguardPreview){const banner=document.createElement('div');banner.className='preview-banner';banner.textContent='Preview data — desktop interaction adapter';document.querySelector('.main-content').prepend(banner);}
-    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.2.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
+    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.3.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
     catch(error){toast(errorText(error),'error',15000);}
   }
   void init();

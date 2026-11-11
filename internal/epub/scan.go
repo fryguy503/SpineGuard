@@ -1,9 +1,7 @@
 package epub
 
 import (
-	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/xml"
 	"fmt"
 	"image"
@@ -126,6 +124,7 @@ func Scan(ctx context.Context, filename string, opts Options) (report Report, er
 		}
 	}
 	report.Author = strings.Join(authors, ", ")
+	report.Series, report.SeriesIndex = packageSeries(pkg)
 	for _, v := range pkg.Metadata.Languages {
 		if v.XMLName.Space == "http://purl.org/dc/elements/1.1/" && report.Language == "" {
 			report.Language = strings.TrimSpace(v.Text)
@@ -433,29 +432,5 @@ func (a *archive) checkImage(name, media string) {
 }
 
 func (a *archive) coverData(name string) {
-	f := a.files[name]
-	if f == nil || f.UncompressedSize64 > 2<<20 {
-		return
-	}
-	b, err := a.read(name)
-	if err != nil {
-		return
-	}
-	cfg, format, err := image.DecodeConfig(bytes.NewReader(b))
-	if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > 6000 || cfg.Height > 6000 || int64(cfg.Width)*int64(cfg.Height) > 20000000 {
-		return
-	}
-	mime := ""
-	switch format {
-	case "jpeg":
-		mime = "image/jpeg"
-	case "png":
-		mime = "image/png"
-	case "gif":
-		mime = "image/gif"
-	}
-	if mime == "" {
-		return
-	}
-	a.report.CoverData = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(b)
+	a.report.CoverData, _ = coverThumbnail(a.ctx, a.files[name])
 }

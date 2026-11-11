@@ -1,8 +1,12 @@
 # Validation and repair behavior
 
-SpineGuard 1.2.1 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.3.0 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
+
+Library grouping reads explicitly typed EPUB 3 series collections and Calibre series metadata. Conflicting series are not guessed; missing series remain empty. CSV exports append series and series position. Loading a cover from saved history reads only bounded local package/cover resources, returns a JPEG thumbnail of at most 320 pixels on its longest side, and does not persist image data or change the book's scan result.
+
+Bulk repair previews selected books with the standard repair defaults. Saving requires each preview's SHA-256, rechecks eligibility, and writes separate uniquely named copies into one chosen folder. Optional cleanup, new identifiers, and language choices are excluded from bulk requests. Malformed request structure is rejected before writing; a missing, changed, blocked, or otherwise failing source is reported for that book while remaining books continue. Cancellation keeps completed copies and cleans unfinished temporary output.
 
 | Area | Checks |
 | --- | --- |

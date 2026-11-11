@@ -24,6 +24,8 @@ type Report struct {
 	Filename    string    `json:"filename"`
 	Title       string    `json:"title"`
 	Author      string    `json:"author"`
+	Series      string    `json:"series,omitempty"`
+	SeriesIndex string    `json:"seriesIndex,omitempty"`
 	Language    string    `json:"language"`
 	EPUBVersion string    `json:"epubVersion"`
 	Identifier  string    `json:"identifier"`

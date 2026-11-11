@@ -2,7 +2,19 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.3.0 cover views, grouping, and bulk repair
+
+- Added cover and list views with remembered author/series/health grouping and sort preferences. EPUB series metadata is read without guessing from filenames.
+- Covers load locally from known saved books without requiring a full rescan; bounded thumbnails stay out of persisted report history.
+- Bulk repair reviews selected books, applies default fixes only after confirmation, chooses one output folder, and preserves originals and existing output files. Language and optional cleanup decisions remain individual.
+- Cancellation retains completed copies and reports unfinished items; changed-source and per-book failures remain visible.
+- Go tests and `go vet` pass, and Windows app/CLI/portable/installer packages build locally. Browser coverage includes 37 passing cases, including filtered selection, bulk-to-individual handoff, keyboard focus, source hashes, cancellation, partial failures, and compact layouts in both themes.
+- Read-only verification of 31 local books preserved all source hashes and word counts. Nine books supplied declared series metadata; all 29 declared covers loaded successfully without a health rescan. Two books without declared covers use placeholders.
+- Native interactive acceptance, Windows publisher signing, Mac notarization, and physical-reader acceptance remain separate gates.
+
 ## 1.2.1 simpler repair review
+
+- Published the versioned Windows/Mac binaries, command-line tools, checksums, and build provenance. All eight published assets were freshly downloaded and matched their reviewed SHA-256 hashes.
 
 - Repair review presents the selected book's available fixes in plain language and shows only relevant questions or optional changes.
 - Language choices use language names; detected suggestions still require confirmation. Optional removal of interactive features and creation of a missing identifier remain explicit choices.

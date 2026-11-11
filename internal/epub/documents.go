@@ -43,6 +43,9 @@ type packageDoc struct {
 		Languages   []xmlValue `xml:"language"`
 		Identifiers []xmlValue `xml:"identifier"`
 		Meta        []struct {
+			XMLName  xml.Name
+			ID       string `xml:"id,attr"`
+			Refines  string `xml:"refines,attr"`
 			Name     string `xml:"name,attr"`
 			Content  string `xml:"content,attr"`
 			Property string `xml:"property,attr"`

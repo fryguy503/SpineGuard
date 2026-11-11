@@ -21,7 +21,7 @@ func Export(w io.Writer, format string, reports []Report) error {
 		}{"SpineGuard", time.Now().UTC(), reports})
 	case "csv":
 		writer := csv.NewWriter(w)
-		if err := writer.Write([]string{"Filename", "Title", "Author", "Language", "EPUB version", "Built-in result", "Errors", "Warnings", "Words", "Estimated pages", "Source page markers", "Reading minutes", "Chapters", "Images", "File bytes", "EPUBCheck", "Path"}); err != nil {
+		if err := writer.Write([]string{"Filename", "Title", "Author", "Language", "EPUB version", "Built-in result", "Errors", "Warnings", "Words", "Estimated pages", "Source page markers", "Reading minutes", "Chapters", "Images", "File bytes", "EPUBCheck", "Path", "Series", "Series index"}); err != nil {
 			return err
 		}
 		for _, r := range reports {
@@ -29,7 +29,7 @@ func Export(w io.Writer, format string, reports []Report) error {
 			if r.EPUBCheck != nil {
 				validation = r.EPUBCheck.Status
 			}
-			row := []string{r.Filename, r.Title, r.Author, r.Language, r.EPUBVersion, r.Status, strconv.Itoa(r.Errors), strconv.Itoa(r.Warnings), strconv.Itoa(r.Stats.Words), strconv.Itoa(r.Stats.EstimatedPages), strconv.Itoa(r.Stats.SourcePages), strconv.Itoa(r.Stats.ReadingMinutes), strconv.Itoa(r.Stats.Chapters), strconv.Itoa(r.Stats.Images), strconv.FormatInt(r.FileBytes, 10), validation, r.Path}
+			row := []string{r.Filename, r.Title, r.Author, r.Language, r.EPUBVersion, r.Status, strconv.Itoa(r.Errors), strconv.Itoa(r.Warnings), strconv.Itoa(r.Stats.Words), strconv.Itoa(r.Stats.EstimatedPages), strconv.Itoa(r.Stats.SourcePages), strconv.Itoa(r.Stats.ReadingMinutes), strconv.Itoa(r.Stats.Chapters), strconv.Itoa(r.Stats.Images), strconv.FormatInt(r.FileBytes, 10), validation, r.Path, r.Series, r.SeriesIndex}
 			for i, cell := range row {
 				row[i] = safeCSV(cell)
 			}
