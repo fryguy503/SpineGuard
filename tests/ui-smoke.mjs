@@ -1062,6 +1062,7 @@ test('bulk preview errors and invalid source hashes cannot produce saved copies'
   await failed.getByRole('alert').filter({hasText:'library folder is unavailable'}).waitFor();
   assert.equal(await failed.locator('#bulk-save-button').isDisabled(),true);
   await failed.locator('#bulk-done-button').click();
+  await failed.waitForFunction(()=>!document.getElementById('rescan-library-button').disabled);
   assert.equal(await failed.locator('#rescan-library-button').isDisabled(),false);
   assert.equal(await callCount(failed,'RepairBooks'),0);
   const page=await openApp(t,{reports:[warningBook],bulkPlans:{[warningBook.path]:{sourceSha256:'not-a-valid-hash',actions:[{kind:'packaging',description:'<img src=x onerror="window.__xssExecuted=true">',count:1}]}}});
