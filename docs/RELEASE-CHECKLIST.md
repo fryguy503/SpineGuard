@@ -2,6 +2,13 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.3.1 stale NCX cover links
+
+- Added a narrowly evidenced correction for a missing Cover entry in the active EPUB 2 NCX: the OPF guide identifies the cover page, the navigation label matches, and the existing cover wrapper displays the uniquely declared cover image.
+- Only the broken link is edited. Navigation labels, play order, chapter contents, and original files are preserved. Ambiguous identities, missing chapters, unknown bases/encoding, and invalid cover evidence remain unmodified.
+- A real-book test copy cleared the native missing-link error, preserved its original hash, word/chapter counts, and all 69 other compressed resource payloads, and changed only the one NCX cover path. Official EPUBCheck cleared the missing-resource finding without introducing any new formal findings; two unrelated existing conformance findings remained.
+- Focused fixtures cover ambiguous or missing roles, invalid navigation structure, namespaces, base URIs, encoding, queries/fragments, non-cover contents, existing destinations, and disabled link repair. Local Go tests and `go vet` pass, and Windows app/CLI/portable/installer packages build successfully. Platform CI checks the full browser suite and Windows/universal Mac packages before distribution.
+
 ## 1.3.0 cover views, grouping, and bulk repair
 
 - Added cover and list views with remembered author/series/health grouping and sort preferences. EPUB series metadata is read without guessing from filenames.

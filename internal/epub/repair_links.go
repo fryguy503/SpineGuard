@@ -25,6 +25,7 @@ type linkRepairIndex struct {
 	folded    map[string][]string
 	complete  bool
 	resources repairResourceCatalog
+	ncxCover  *ncxCoverRepair
 }
 
 func buildLinkRepairIndex(ctx context.Context, text map[string][]byte, files map[string]bool) linkRepairIndex {
@@ -84,6 +85,7 @@ func buildLinkRepairIndex(ctx context.Context, text map[string][]byte, files map
 			}
 		}
 	}
+	index.ncxCover = proveNCXCoverRepair(ctx, text, index)
 	return index
 }
 
@@ -242,6 +244,10 @@ func planLinkDocuments(ctx context.Context, text map[string][]byte, files map[st
 				navigation := (attr.Local == "href" && (el.Name.Local == "a" || el.Name.Local == "area")) || (el.Name.Local == "content" && attr.Local == "src")
 				kind := referenceResourceKind(el, attr)
 				replacement, code, detail, reason := index.destination(name, attr.Value, navigation, kind, isExplicitCoverImage(doc.elements, elementIndex))
+				if cover := index.ncxCover; replacement == "" && code == "LINK_MISSING" && cover != nil && cover.document == name && cover.element == elementIndex && attr.Name == "src" && attr.Value == cover.original {
+					replacement = relativeResourceURL(name, cover.page, attr.Value)
+					reason = "Redirect the cover entry to the explicitly declared cover page, corroborated by its declared cover image: " + cover.page + "."
+				}
 				if code == "" {
 					continue
 				}

@@ -30,7 +30,7 @@
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
   const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.3.0',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.3.1',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
   const collator=new Intl.Collator('en',{numeric:true,sensitivity:'base'});
   const coverAttempts=new Set(),coverQueued=new Set(),coverQueue=[];
   let coverObserver=null,coverWorkers=0;
@@ -521,7 +521,7 @@
     $('settings-form').elements.readingWPM.min='80';
     if(/Mac/i.test(navigator.platform))$('open-shortcut').textContent='⌘ O';
     if(window.spineguardPreview){const banner=document.createElement('div');banner.className='preview-banner';banner.textContent='Preview data — desktop interaction adapter';document.querySelector('.main-content').prepend(banner);}
-    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.3.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
+    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.3.1';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
     catch(error){toast(errorText(error),'error',15000);}
   }
   void init();
