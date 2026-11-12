@@ -17,13 +17,14 @@ import (
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const version = "1.4.0"
+const version = "1.4.1"
 
 type App struct {
-	ctx       context.Context
-	service   *library.Service
-	reader    *reader.Manager
-	operation sync.Mutex
+	ctx           context.Context
+	service       *library.Service
+	reader        *reader.Manager
+	operation     sync.Mutex
+	readerWindows *readerWindows
 }
 
 func NewApp() *App {
@@ -36,7 +37,7 @@ func NewApp() *App {
 	if portable := os.Getenv("SPINEGUARD_CONFIG_DIR"); portable != "" {
 		dir = portable
 	}
-	return &App{ctx: context.Background(), service: library.New(dir), reader: reader.New(dir)}
+	return &App{ctx: context.Background(), service: library.New(dir), reader: reader.New(dir), readerWindows: newReaderWindows(dir)}
 }
 
 func (a *App) startup(ctx context.Context)  { a.ctx = ctx }

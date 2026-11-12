@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { after, before, test } from 'node:test';
 import { spawn } from 'node:child_process';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,7 +93,12 @@ async function openApp(t, config = {}) {
     const harness = window.__readerHarness = { calls: [], reports, paths: state.paths, lastBook: null, bridgeCalls: 0, sourceRequests:0, saveRequests:0, searchRequests:0 };
     window.__bookExecuted = false;
     window.go = { main: { App: { DangerousBookCall() { harness.bridgeCalls++; } } } };
-    window.runtime = { EventsOn() {}, OnFileDrop() {} };
+    const listeners=new Map();
+    window.runtime = {
+      EventsOn(name,callback){const group=listeners.get(name)||[];group.push(callback);listeners.set(name,group);return ()=>listeners.set(name,(listeners.get(name)||[]).filter(entry=>entry!==callback));},
+      OnFileDrop() {},WindowSetTitle() {},WindowShow() {},WindowCenter() {},
+    };
+    harness.emit=(name,...args)=>{for(const listener of listeners.get(name)||[])listener(...args);};
     const call = async (method, args) => {
       const record={ name: method, args, done:false };harness.calls.push(record);
       const sourceIndex=method==='ReadReaderSource'?harness.sourceRequests++:-1;
@@ -125,13 +130,23 @@ async function openApp(t, config = {}) {
       record.done=true;
       return value;
     };
-    window.spineguardPreview = {
+    const readerAPI=Object.fromEntries(['OpenReader', 'CancelReaderOpen', 'CancelReaderSearch', 'CloseReader', 'SaveReaderState', 'SearchReader', 'LocateReaderIssue', 'ReadReaderSource'].map(method => [method, (...args) => call(method, args)]));
+    const adapter = {
       async GetState() { return { ...state, reports, settings: { ...state.settings, theme: config.appTheme || 'dark' } }; },
       async GetBookCover() { return ''; },
       async SaveSettings(settings) { return settings; },
       async RevealBook() {}, async OpenExternal() {},
-      ...Object.fromEntries(['OpenReader', 'CancelReaderOpen', 'CancelReaderSearch', 'CloseReader', 'SaveReaderState', 'SearchReader', 'LocateReaderIssue', 'ReadReaderSource'].map(method => [method, (...args) => call(method, args)])),
+      async OpenReaderWindow(path,issueIndex=-1){harness.calls.push({name:'OpenReaderWindow',args:[path,issueIndex],done:true});if(!config.launchDetachedOnly)void window.SpineGuardReader.open(path,issueIndex);},
+      ...readerAPI,
     };
+    if(config.standalone){
+      delete window.go.main.App;
+      window.go.main.ReaderWindow={...readerAPI,
+        async GetReaderLaunch(){harness.calls.push({name:'GetReaderLaunch',args:[],done:true});return {path:state.paths[config.readerKind||'normal'],issueIndex:config.issueIndex??-1,theme:config.appTheme||'dark'};},
+        async RequestClose(){harness.calls.push({name:'RequestClose',args:[],done:true});harness.emit('reader:before-close');},
+        async CloseWindow(){harness.calls.push({name:'CloseWindow',args:[],done:true});},
+      };
+    }else window.spineguardPreview=adapter;
   }, { state, config });
   t.after(async () => {
     await page.evaluate(() => window.SpineGuardReader?.close()).catch(() => {});
@@ -139,8 +154,8 @@ async function openApp(t, config = {}) {
     assert.deepEqual(errors, [], 'reader must not raise unhandled JavaScript errors');
     assert.deepEqual(externalRequests, [], 'EPUB resources must not request external network access');
   });
-  await page.goto(origin);
-  await page.waitForFunction(() => !!window.SpineGuardReader && document.querySelector('#book-rows')?.children.length > 0);
+  await page.goto(config.standalone?`${origin}/reader.html`:origin);
+  await page.waitForFunction(standalone => !!window.SpineGuardReader && (standalone?document.querySelector('#reader-dialog')?.open:document.querySelector('#book-rows')?.children.length > 0),!!config.standalone);
   return { page, state, context };
 }
 
@@ -170,6 +185,20 @@ async function choosePane(page, pane) {
 async function unchanged() {
   const evidence = await json('/__test/evidence');
   assert.ok(Object.values(evidence).every(value => value.unchanged), 'reading, searching, and bookmarking must preserve original EPUB bytes');
+}
+
+async function paintedCover(page,stage){
+  const deadline=Date.now()+5_000;let png,pixels;
+  do{
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    png=await page.screenshot();
+    pixels=await json('/__test/pixels',{method:'POST',headers:{'Content-Type':'image/png'},body:png});
+    if(pixels.green.count>stage.width*stage.height*0.4&&pixels.marker.count>100)break;
+  }while(Date.now()<deadline);
+  assert.ok(pixels.green.count>stage.width*stage.height*0.4,'the actual cover must paint on the first page without requiring a resize: '+JSON.stringify(pixels));
+  assert.ok(Math.abs(pixels.green.width/pixels.green.height-2/3)<0.015,'the painted cover must retain its portrait proportions: '+JSON.stringify(pixels));
+  assert.ok(Math.abs(pixels.marker.width/pixels.marker.height-1)<0.06,'the round artwork marker must remain round: '+JSON.stringify(pixels));
+  return {png,pixels};
 }
 
 test('real Manager preserves local resources, rejects traversal and expires closed sessions', async () => {
@@ -208,6 +237,7 @@ test('real Manager preserves local resources, rejects traversal and expires clos
 test('EPUB3 opens with publisher styling, local image, paging, contents and search', async t => {
   const { page, state } = await openApp(t, { kinds: ['normal'] });
   await page.locator('[data-detail-action="read"]').click();
+  await page.waitForFunction(()=>window.__readerHarness.calls.some(call=>call.name==='OpenReaderWindow'));
   await page.locator('#reader-dialog').waitFor({ state: 'visible' });
   await expectChapter(page, 'First chapter');
   await page.waitForFunction(() => document.querySelector('#reader-stage iframe')?.contentDocument?.querySelector('#local-image')?.naturalWidth === 36);
@@ -252,6 +282,19 @@ test('EPUB3 opens with publisher styling, local image, paging, contents and sear
   await page.keyboard.press('Escape');
   await page.locator('#reader-license-dialog').waitFor({state:'hidden'});
   assert.equal(await page.locator('#reader-dialog').isVisible(),true);
+  await unchanged();
+});
+
+test('library Read requests a detached reader without covering or blocking the library', async t=>{
+  const {page,state}=await openApp(t,{kinds:['normal'],launchDetachedOnly:true});
+  await page.locator('[data-detail-action="read"]').click();
+  await page.waitForFunction(()=>window.__readerHarness.calls.some(call=>call.name==='OpenReaderWindow'));
+  const launch=await page.evaluate(()=>window.__readerHarness.calls.find(call=>call.name==='OpenReaderWindow'));
+  assert.equal(launch.args[0],state.paths.normal);
+  assert.equal(launch.args[1],-1);
+  assert.equal(await page.locator('#reader-dialog').isVisible(),false);
+  assert.equal(await page.locator('#add-button').isEnabled(),true);
+  assert.equal(await page.locator('#rescan-library-button').isEnabled(),true);
   await unchanged();
 });
 
@@ -474,6 +517,131 @@ test('source fingerprint changes invalidate session resources instead of reading
   await assert.rejects(api('ReadReaderSource', book.sessionId, book.spine[0].id, 1, 0), /changed|modified|reopen|stale/i);
   await api('CloseReader', book.sessionId);
 });
+
+for(const coverKind of ['svgcover','htmlcover']){
+  test(`detached ${coverKind} stays portrait and preserves artwork proportions when resized`,async t=>{
+    const {page,state}=await openApp(t,{standalone:true,readerKind:coverKind,viewport:{width:760,height:980}});
+    await page.waitForFunction(()=>!!document.querySelector('#reader-stage iframe')?.contentDocument?.querySelector('#cover-svg, #cover-html-image'));
+    assert.equal(await page.evaluate(()=>typeof window.spineguardPreview),'undefined','standalone reader must use its restricted ReaderWindow bridge');
+    assert.equal(await page.locator('#reader-panels-button').getAttribute('aria-expanded'),'false');
+    for(const viewport of [{width:760,height:980},{width:1920,height:1080},{width:560,height:680}]){
+      await page.setViewportSize(viewport);
+      const presentationHandle=await page.waitForFunction(()=>{
+        const rect=element=>{const r=element.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+        const stage=document.getElementById('reader-stage'),canvas=stage.closest('.reader-canvas'),frame=stage.querySelector('iframe'),doc=frame?.contentDocument;
+        const page=rect(stage),area=rect(canvas);if(!doc||page.width<200||page.height<300||Math.abs(page.width/page.height-2/3)>0.02||doc.documentElement.dataset.spineguardCover!=='true'||page.x<area.x||page.right>area.right||page.y<area.y||page.bottom>area.bottom||getComputedStyle(frame).visibility!=='visible')return false;
+        const svg=doc.querySelector('#cover-svg'),svgImage=doc.querySelector('#cover-svg-image'),image=doc.querySelector('#cover-html-image');
+        const matrix=svgImage?.getScreenCTM();
+        if(svgImage&&!matrix||image&&!image.naturalWidth)return false;
+        const bodyStyle=doc.defaultView.getComputedStyle(doc.body),artStyle=doc.defaultView.getComputedStyle(svg||image);
+        const ancestors=[];for(let node=frame;node&&node!==canvas;node=node.parentElement){const style=getComputedStyle(node);ancestors.push({name:node.className||node.id||node.localName,rect:rect(node),visibility:style.visibility,opacity:style.opacity,overflow:style.overflow,clip:style.clipPath,transform:style.transform,scrollLeft:node.scrollLeft,scrollTop:node.scrollTop});}
+        const sourceStyles=[doc.documentElement,doc.body,svg||image].map(node=>{const style=doc.defaultView.getComputedStyle(node);return {node:node.localName,css:node.getAttribute('style'),width:style.width,height:style.height,columnWidth:style.columnWidth,columnCount:style.columnCount,columnGap:style.columnGap,overflow:style.overflow,position:style.position,margin:style.margin,padding:style.padding,scrollLeft:node.scrollLeft,scrollTop:node.scrollTop};});
+        return {stage:page,canvas:rect(canvas),frame:rect(frame),body:rect(doc.body),art:rect(svg||image),ancestors,sourceStyles,visible:{loading:!document.getElementById('reader-loading').hidden,body:bodyStyle.visibility,bodyOpacity:bodyStyle.opacity,art:artStyle.visibility,artOpacity:artStyle.opacity,view:getComputedStyle(frame.parentElement).cssText,viewOpacity:getComputedStyle(frame.parentElement).opacity},cover:doc.documentElement.dataset.spineguardCover,
+          svg:svg?{aspect:svg.getAttribute('preserveAspectRatio'),imageAspect:svgImage.getAttribute('preserveAspectRatio'),href:svgImage.href.baseVal,base:doc.baseURI,scaleX:Math.hypot(matrix.a,matrix.b),scaleY:Math.hypot(matrix.c,matrix.d)}:null,
+          image:image?{naturalWidth:image.naturalWidth,naturalHeight:image.naturalHeight,fit:doc.defaultView.getComputedStyle(image).objectFit}:null,
+          overflow:document.documentElement.scrollWidth-innerWidth};
+      });
+      const presentation=await presentationHandle.jsonValue();await presentationHandle.dispose();
+      assert.ok(presentation.stage.x>=presentation.canvas.x-1&&presentation.stage.right<=presentation.canvas.right+1,JSON.stringify(presentation));
+      assert.ok(presentation.stage.y>=presentation.canvas.y-1&&presentation.stage.bottom<=presentation.canvas.bottom+1,JSON.stringify(presentation));
+      assert.ok(presentation.overflow<=1,JSON.stringify(presentation));
+      assert.equal(presentation.cover,'true');
+      if(presentation.svg){assert.ok(!/none/i.test(presentation.svg.aspect));assert.ok(!/none/i.test(presentation.svg.imageAspect));assert.ok(Math.abs(presentation.svg.scaleX/presentation.svg.scaleY-1)<0.01,JSON.stringify(presentation));assert.ok(presentation.svg.href,'SVG cover image must retain a usable resource reference');const loaded=await page.evaluate(async href=>{const image=new Image();image.src=href;await image.decode();await new Promise(requestAnimationFrame);return {width:image.naturalWidth,height:image.naturalHeight};},new URL(presentation.svg.href,presentation.svg.base).href);assert.deepEqual(loaded,{width:36,height:54});}
+      else{assert.equal(presentation.image.naturalWidth,36);assert.equal(presentation.image.naturalHeight,54);assert.equal(presentation.image.fit,'contain');}
+      const painted=await paintedCover(page,presentation.stage);
+      if(process.env.SPINEGUARD_UI_SCREENSHOTS){await mkdir(process.env.SPINEGUARD_UI_SCREENSHOTS,{recursive:true});const basename=`detached-${coverKind}-${viewport.width}x${viewport.height}`;await writeFile(join(process.env.SPINEGUARD_UI_SCREENSHOTS,`${basename}.json`),JSON.stringify({...presentation,pixels:painted.pixels},null,2));await writeFile(join(process.env.SPINEGUARD_UI_SCREENSHOTS,`${basename}.png`),painted.png);}
+    }
+    await page.locator('#reader-next').click();
+    await expectChapter(page,'The unique silver river phrase');
+    await page.locator('#reader-prev').click();
+    await page.waitForFunction(()=>!!document.querySelector('#reader-stage iframe')?.contentDocument?.querySelector('#cover-svg, #cover-html-image'));
+    await page.locator('#reader-panels-button').click();
+    assert.equal(await page.locator('#reader-panels-button').getAttribute('aria-expanded'),'true');
+    await choosePane(page,'contents');
+    await page.locator('#reader-toc').getByRole('button',{name:'Second chapter',exact:true}).click();
+    await expectChapter(page,'The unique silver river phrase');
+    const model=await page.evaluate(()=>window.__readerHarness.lastBook);
+    const cover=model.resources.find(resource=>resource.path.endsWith('chapter-one.xhtml'));
+    const source=await api('ReadReaderSource',model.sessionId,cover.id,1,1);
+    if(coverKind==='svgcover')assert.match(source.content,/preserveAspectRatio="none"/,'original SVG aspect instructions must be preserved in Source');
+    else assert.match(source.content,/width:100%;height:100%/,'original image styling must be preserved in Source');
+    assert.equal(model.title,state.reports.find(report=>report.path===state.paths[coverKind]).title);
+    await unchanged();
+  });
+}
+
+test('detached Inspect opens its findings drawer and original metadata source',async t=>{
+  await json('/__test/reset',{method:'POST'});
+  const fixtureState=await json('/__test/state');
+  const metadataIndex=fixtureState.reports.find(book=>book.path===fixtureState.paths.normal).issues.findIndex(issue=>issue.code==='METADATA_LANGUAGE');
+  const {page}=await openApp(t,{standalone:true,readerKind:'normal',issueIndex:metadataIndex,viewport:{width:560,height:680}});
+  await page.waitForFunction(()=>document.querySelector('#reader-source-output')?.textContent?.includes('<package'));
+  assert.equal(await page.locator('#reader-panels-button').getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('[data-reader-pane="findings"]').getAttribute('aria-pressed'),'true');
+  assert.equal(await page.locator('#reader-source-output package').count(),0);
+  const bounds=await page.evaluate(()=>{const source=document.getElementById('reader-source-output').getBoundingClientRect(),sidebar=document.getElementById('reader-sidebar').getBoundingClientRect();return {source:{left:source.left,right:source.right,width:source.width},sidebar:{left:sidebar.left,right:sidebar.right,width:sidebar.width}};});
+  if(process.env.SPINEGUARD_UI_SCREENSHOTS)await page.screenshot({path:join(process.env.SPINEGUARD_UI_SCREENSHOTS,'detached-metadata-source-560x680.png')});
+  assert.ok(bounds.source.left>=bounds.sidebar.right-1,'the findings drawer must not cover the source concern: '+JSON.stringify(bounds));
+  await page.locator('#reader-panel-close').click();
+  const fullWidth=await page.evaluate(()=>{const source=document.getElementById('reader-source-output').getBoundingClientRect(),canvas=document.querySelector('.reader-canvas').getBoundingClientRect();return {source:{left:source.left,right:source.right},canvas:{left:canvas.left,right:canvas.right}};});
+  assert.ok(Math.abs(fullWidth.source.left-fullWidth.canvas.left)<=1&&Math.abs(fullWidth.source.right-fullWidth.canvas.right)<=1,'closing the drawer should restore the full source view: '+JSON.stringify(fullWidth));
+  await unchanged();
+});
+
+test('reused detached Inspect keeps its concern after notice and viewport layout settle',async t=>{
+  const {page,state}=await openApp(t,{standalone:true,readerKind:'normal',viewport:{width:760,height:980}});
+  await expectChapter(page,'Publisher styles are retained.');
+  await page.locator('#reader-panels-button').click();
+  await choosePane(page,'contents');
+  await page.locator('#reader-toc').getByRole('button',{name:'Second chapter',exact:true}).click();
+  await expectChapter(page,'The unique silver river phrase');
+  await page.waitForFunction(()=>/Section 2 of 2/.test(document.querySelector('#reader-progress').textContent));
+  const linkIndex=state.reports.find(book=>book.path===state.paths.normal).issues.findIndex(issue=>issue.code==='LINK_MISSING');
+  await page.evaluate(launch=>window.__readerHarness.emit('reader:open',launch),{path:state.paths.normal,issueIndex:linkIndex,theme:'dark'});
+  await page.waitForFunction(()=>document.querySelector('#reader-stage iframe')?.contentDocument?.querySelector('[data-sg-focus="true"]')?.getAttribute('data-sg-ref')==='missing-image.png');
+  for(const viewport of [{width:560,height:680},{width:820,height:1000},{width:760,height:980}]){
+    await page.setViewportSize(viewport);
+    await page.evaluate(()=>{delete window.__concernStableSince;});
+    await page.waitForFunction(()=>{
+      const expected=[...document.querySelectorAll('#reader-stage iframe')].some(frame=>getComputedStyle(frame).visibility==='visible'&&frame.contentDocument?.querySelector('[data-sg-focus="true"]')?.getAttribute('data-sg-ref')==='missing-image.png')&&/Section 1 of 2/.test(document.querySelector('#reader-progress').textContent);
+      if(!expected){delete window.__concernStableSince;return false;}
+      window.__concernStableSince??=performance.now();return performance.now()-window.__concernStableSince>=400;
+    },null,{timeout:5_000});
+  }
+  assert.equal(await page.locator('#reader-panels-button').getAttribute('aria-expanded'),'true');
+  assert.equal(await page.locator('[data-reader-pane="findings"]').getAttribute('aria-pressed'),'true');
+  const concernBounds=await page.evaluate(()=>{const frame=[...document.querySelectorAll('#reader-stage iframe')].find(frame=>frame.contentDocument?.querySelector('[data-sg-focus="true"]'));const frameRect=frame.getBoundingClientRect(),mark=frame.contentDocument.querySelector('[data-sg-focus="true"]').getBoundingClientRect(),sidebar=document.getElementById('reader-sidebar').getBoundingClientRect();return {left:frameRect.left+mark.left,right:frameRect.left+mark.right,top:frameRect.top+mark.top,bottom:frameRect.top+mark.bottom,sidebarRight:sidebar.right};});
+  assert.ok(concernBounds.left>=concernBounds.sidebarRight-3,'the findings drawer must not cover the highlighted book element: '+JSON.stringify(concernBounds));
+  await unchanged();
+});
+
+for(const closeAction of ['button','native-event']){
+  test(`detached ${closeAction} close flushes bookmark notes before closing its session and window`,async t=>{
+    const {page,state}=await openApp(t,{standalone:true,readerKind:'normal',saveDelays:[250,0]});
+    await expectChapter(page,'Publisher styles are retained.');
+    await page.waitForFunction(()=>!document.querySelector('#reader-bookmark-button').disabled);
+    await page.locator('#reader-bookmark-button').click();
+    await page.locator('[data-bookmark-note]').fill(`Saved before ${closeAction} close.`);
+    await page.locator('[data-save-bookmark-note]').click();
+    const model=await page.evaluate(()=>window.__readerHarness.lastBook);
+    if(closeAction==='button')await page.locator('#reader-close').click();
+    else await page.evaluate(()=>window.__readerHarness.emit('reader:before-close'));
+    await page.evaluate(launch=>window.__readerHarness.emit('reader:open',launch),{path:state.paths.normal,issueIndex:-1,theme:'dark'});
+    await page.waitForFunction(()=>window.__readerHarness.calls.some(call=>call.name==='CloseWindow'));
+    const calls=await page.evaluate(()=>window.__readerHarness.calls);
+    assert.equal(calls.filter(call=>call.name==='OpenReader').length,1,'an IPC open received during close must not reopen or invalidate the session being saved');
+    const closeIndex=calls.findIndex(call=>call.name==='CloseWindow');
+    const saves=calls.slice(0,closeIndex).filter(call=>call.name==='SaveReaderState');
+    assert.ok(saves.length>0&&saves.every(call=>call.done),'all queued saves must finish before native close');
+    assert.equal(saves.at(-1).args[1].bookmarks[0].note,`Saved before ${closeAction} close.`);
+    assert.ok(calls.slice(0,closeIndex).some(call=>call.name==='CloseReader'&&call.done),'reader session must close before native window');
+    assert.notEqual((await fetch(`${origin}${model.packageUrl}`)).status,200);
+    const reopened=await api('OpenReader',state.paths.normal);
+    assert.equal(reopened.state.bookmarks[0].note,`Saved before ${closeAction} close.`);
+    await api('CloseReader',reopened.sessionId);
+    await unchanged();
+  });
+}
 
 for (const appTheme of ['dark', 'light']) {
   test(`reader fits the minimum window in ${appTheme} app theme`, async t => {

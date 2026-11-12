@@ -4,7 +4,11 @@ SpineGuard's built-in reader opens books already present in your scanned library
 
 ## Reading a book
 
-Select a scanned book and choose **Read book**. Choose a table-of-contents entry or use chapter navigation to move through the book. **Reading settings** lets you change the theme, font, text size, and line spacing, and switch between page turns and continuous scrolling. Choose **Publisher** or **Reset to publisher** to use the book's own presentation. Publisher styles, tables, local images, passive SVG/MathML, and supported local fonts are retained where possible.
+Select a scanned book and choose **Read book**. A separate native reader window opens in portrait orientation. You can continue using the library or close it while reading. Opening the same book again reuses its reader; opening a different book creates another reader window.
+
+The reading page stays portrait-shaped even when the window is widened or maximized. Full-page HTML and SVG covers are fitted without stretching their artwork. Reflowable books have no fixed physical page dimensions; the preview uses a portrait page and scales supported fixed-layout content within it. These display adjustments never change the EPUB.
+
+Choose **Explore** to open Contents, Findings, Search, Bookmarks, or Files. Close the panel when you want more space for reading. Choose a table-of-contents entry or use page navigation to move through the book. **Reading settings** lets you change the theme, font, text size, and line spacing, and switch between page turns and continuous scrolling. Choose **Publisher** or **Reset to publisher** to use the book's own text presentation. Publisher styles, tables, local images, passive SVG/MathML, and supported local fonts are retained where possible.
 
 Use text search to find passages in available documents. Queries must contain at least two characters; search returns up to 100 matches and scans up to 128 MiB of text resources. Some damaged, protected, image-only, or unsupported content cannot be searched. Search results can be opened in the reader for inspection.
 
@@ -12,7 +16,7 @@ Use **＋ Bookmark** to save the current page. The **Bookmarks** panel lets you 
 
 ## Opening a finding
 
-Choose **Inspect** on a finding to open its original file when that file is available. For book pages, SpineGuard uses an exact reference or identifier to highlight the relevant element when possible. Missing-link findings point to the page containing the broken link. They cannot display a destination that is absent from the EPUB.
+Choose **Inspect** on a finding to open or bring forward its reader, with the Findings panel open. It opens the original file when that file is available. For book pages, SpineGuard uses an exact reference or identifier to highlight the relevant element when possible. Missing-link findings point to the page containing the broken link. They cannot display a destination that is absent from the EPUB.
 
 Some concerns belong to package metadata, stylesheets, navigation files, scripts, or archive structure. These open in **Source** or show an explanation when there is no readable file. Source shows the original markup as text, with line numbers. It does not execute that markup. Large files are shown in bounded excerpts around the relevant line and column.
 
@@ -40,4 +44,4 @@ This preview uses your Windows WebView2 or macOS system webview. It can help ins
 | Source excerpt | Up to 200 lines and 128 KiB per request. |
 | Saved reading state | Up to 200 books and 200 bookmarks per book; 4 MiB total state file. |
 
-Reading positions and bookmarks are stored in `reader-state.json` in SpineGuard's normal configuration directory. The operating system webview may also keep its own cache. The original EPUB is never rewritten by opening, searching, navigating, or bookmarking it.
+Reading positions and bookmarks are stored in `reader-state.json` in SpineGuard's normal configuration directory. Saves coordinate between reader windows and merge the latest records for other books. Existing 1.4.0 reading records remain supported. Closing a native reader window flushes its latest position and bookmarks before exiting. The operating system webview may also keep its own cache. The original EPUB is never rewritten by opening, searching, navigating, or bookmarking it.

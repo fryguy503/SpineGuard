@@ -217,6 +217,13 @@ func (m *Manager) Open(parent context.Context, filename string, issues []epub.Is
 		m.mu.Unlock()
 		return Book{}, context.Canceled
 	}
+	if e := m.refreshStates(ctx); e != nil {
+		s.book.Warnings = appendUnique(s.book.Warnings, "Saved reading position could not be loaded. This book can still be inspected.")
+	}
+	if ctx.Err() != nil {
+		m.mu.Unlock()
+		return Book{}, ctx.Err()
+	}
 	if state, exists := m.states[s.book.BookKey]; exists {
 		s.book.State = cloneState(state.State)
 	} else {

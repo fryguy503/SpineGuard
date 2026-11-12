@@ -7,6 +7,7 @@ require (
 	github.com/tdewolff/parse/v2 v2.8.20
 	github.com/wailsapp/wails/v2 v2.17.0
 	golang.org/x/net v0.62.0
+	golang.org/x/sys v0.49.0
 	golang.org/x/text v0.43.0
 )
 
@@ -35,5 +36,4 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/sys v0.49.0 // indirect
 )

@@ -4,7 +4,7 @@
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.4.0**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.4.1**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
@@ -36,7 +36,9 @@ A clean built-in result means no issues were detected by the checks that ran. It
 
 ## Read and inspect a book
 
-Select a scanned book and choose **Read book** to read it with page turns or continuous scrolling. Use the table of contents, chapter navigation, text search, bookmarks, and reading controls to inspect its layout. Your reading position and bookmarks are saved on this computer.
+Select a scanned book and choose **Read book** to open a separate reader window. The library remains usable, and the reader stays open if you close the library. Opening the same book again brings its existing reader forward. The window starts in portrait orientation, keeps the reading page book-shaped when resized, and fits full-page cover images without stretching them.
+
+Use page turns or continuous scrolling to read. **Explore** opens the contents, findings, search, bookmarks, and files panels; close the panel to return to an unobstructed page. Reading settings control text presentation. Your reading position and bookmarks are saved on this computer.
 
 Choose **Inspect** on a finding to open the relevant page or original file. When a broken link or identifier has a known location, the reader highlights it; package, stylesheet, navigation, and removed interactive content can be inspected in **Source**. A missing resource remains unavailable rather than being replaced with invented content. Use the **Files** view to inspect original book files.
 

@@ -1,6 +1,7 @@
 package reader
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -43,24 +44,52 @@ func (m *Manager) loadStates() {
 	if m.dir == "" {
 		return
 	}
-	f, e := os.Open(filepath.Join(m.dir, "reader-state.json"))
+	_ = m.refreshStates(context.Background())
+}
+
+func readStates(dir string) (map[string]savedState, error) {
+	f, e := os.Open(filepath.Join(dir, "reader-state.json"))
+	if os.IsNotExist(e) {
+		return map[string]savedState{}, nil
+	}
 	if e != nil {
-		return
+		return nil, e
 	}
 	defer f.Close()
 	data, e := io.ReadAll(io.LimitReader(f, (4<<20)+1))
-	if e != nil || len(data) > 4<<20 {
-		return
+	if e != nil {
+		return nil, e
 	}
 	var states map[string]savedState
-	if json.Unmarshal(data, &states) != nil || len(states) > 200 {
-		return
+	if len(data) > 4<<20 || json.Unmarshal(data, &states) != nil || len(states) > 200 {
+		return nil, errors.New("saved reading state cannot be read; its existing file has been preserved")
 	}
-	for key, v := range states {
-		if len(key) == 64 && validState(v.State) == nil {
-			m.states[key] = v
+	if states == nil {
+		states = map[string]savedState{}
+	}
+	for key, value := range states {
+		if len(key) != 64 || validState(value.State) != nil {
+			delete(states, key)
 		}
 	}
+	return states, nil
+}
+
+// The caller owns m.mu, or is constructing a Manager not yet published.
+func (m *Manager) refreshStates(ctx context.Context) error {
+	if m.dir == "" {
+		return nil
+	}
+	unlock, err := lockState(ctx, m.dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	states, err := readStates(m.dir)
+	if err == nil {
+		m.states = states
+	}
+	return err
 }
 func (m *Manager) SaveState(id string, state ReadingState) error {
 	if e := validState(state); e != nil {
@@ -84,8 +113,19 @@ func (m *Manager) SaveState(id string, state ReadingState) error {
 	if m.current != s {
 		return errors.New("reader session expired")
 	}
-	updated := make(map[string]savedState, len(m.states)+1)
-	for k, v := range m.states {
+	unlock, e := lockState(s.ctx, m.dir)
+	if e != nil {
+		return e
+	}
+	defer unlock()
+	current := m.states
+	if m.dir != "" {
+		if current, e = readStates(m.dir); e != nil {
+			return e
+		}
+	}
+	updated := make(map[string]savedState, len(current)+1)
+	for k, v := range current {
 		updated[k] = v
 	}
 	updated[s.book.BookKey] = savedState{state, time.Now().UTC()}

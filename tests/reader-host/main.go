@@ -54,7 +54,7 @@ func bookBytes(kind string) []byte {
 		return []byte("This synthetic fixture is not a ZIP archive.")
 	}
 	legacy := kind == "legacy"
-	title := map[string]string{"normal": "Reader Fixture", "legacy": "Legacy Reader Fixture", "hostile": "Hostile Reader Fixture", "malformed": "Malformed Reader Fixture"}[kind]
+	title := map[string]string{"normal": "Reader Fixture", "legacy": "Legacy Reader Fixture", "hostile": "Hostile Reader Fixture", "malformed": "Malformed Reader Fixture", "svgcover": "SVG Cover Reader Fixture", "htmlcover": "Image Cover Reader Fixture"}[kind]
 	version, language := "3.0", ""
 	if legacy {
 		version, language = "2.0", `<dc:language>en</dc:language>`
@@ -75,6 +75,14 @@ func bookBytes(kind string) []byte {
 		head += `<base href="https://outside.invalid/"/><meta http-equiv="refresh" content="0;url=https://outside.invalid/refresh"/><script>window.__bookExecuted=true;parent.__bookExecuted=true;parent.go.main.App.DangerousBookCall();</script><style>@import "https://outside.invalid/import.css";body{background-image:url(https://outside.invalid/background.png)}p{--leak:url(https://outside.invalid/custom.png);background-image:var(--leak)}</style>`
 		body = `<h1 id="one">Hostile content remains readable</h1><p id="hostile-safe-text">This safe text must remain.</p><img src="../Images/cover.png" alt="Safe local image" onload="parent.__bookExecuted=true"/><img src="https://outside.invalid/leak.png" onerror="parent.__bookExecuted=true"/><a id="unsafe-action" href="javascript:parent.__bookExecuted=true">Unsafe action</a><a id="external-action" href="https://outside.invalid/navigation">External action</a><iframe src="https://outside.invalid/frame"></iframe><object data="https://outside.invalid/object"></object><form action="https://outside.invalid/post"><button>Submit</button></form><svg xmlns="http://www.w3.org/2000/svg" onload="parent.__bookExecuted=true"><script>parent.__bookExecuted=true</script><foreignObject><iframe xmlns="http://www.w3.org/1999/xhtml" src="https://outside.invalid/nested"></iframe></foreignObject><animate attributeName="href" values="javascript:parent.__bookExecuted=true"/></svg>`
 	}
+	if kind == "svgcover" {
+		head = `<title>Cover</title><style>html,body{height:100%;width:100%;margin:0;padding:0;overflow:hidden}svg{width:100%;height:100%}</style>`
+		body = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" id="cover-svg" width="100%" height="100%" viewBox="0 0 600 900" preserveAspectRatio="none"><image id="cover-svg-image" width="600" height="900" preserveAspectRatio="none" xlink:href="../Images/cover.png"/></svg>`
+	}
+	if kind == "htmlcover" {
+		head = `<title>Cover</title><style>html,body{height:100%;width:100%;margin:0;padding:0;overflow:hidden}img{display:block;width:100%;height:100%}</style>`
+		body = `<img id="cover-html-image" src="../Images/cover.png" alt="Synthetic portrait cover"/>`
+	}
 	one := "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head>" + head + "</head>\n<body>" + body + "</body></html>"
 	if kind == "malformed" {
 		one = `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Broken source</title></head><body><h1 id="one">Broken original markup<p>Text survives a malformed document.<p id="concern">Original source stays unmodified.`
@@ -87,6 +95,9 @@ func bookBytes(kind string) []byte {
 	for y := 0; y < 54; y++ {
 		for x := 0; x < 36; x++ {
 			img.Set(x, y, color.RGBA{R: 35, G: 122, B: 104, A: 255})
+			if (kind == "svgcover" || kind == "htmlcover") && (x-18)*(x-18)+(y-27)*(y-27) <= 64 {
+				img.Set(x, y, color.RGBA{R: 223, G: 91, B: 145, A: 255})
+			}
 		}
 	}
 	fatal(png.Encode(&picture, img))
@@ -141,7 +152,7 @@ func (h *host) reset() error {
 	}
 	h.manager = reader.New(state)
 	h.books = map[string]*fixture{}
-	for _, kind := range []string{"normal", "legacy", "hostile", "malformed", "invalid"} {
+	for _, kind := range []string{"normal", "legacy", "hostile", "malformed", "invalid", "svgcover", "htmlcover"} {
 		data := bookBytes(kind)
 		name := filepath.Join(h.root, kind+".epub")
 		if err := os.WriteFile(name, data, 0600); err != nil {
@@ -290,6 +301,47 @@ func (h *host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/__test/pixels":
+		// Check actual browser pixels rather than accepting an offscreen or
+		// unpainted image merely because its DOM geometry looks correct.
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		data, err := io.ReadAll(io.LimitReader(r.Body, (8<<20)+1))
+		if err != nil || len(data) > 8<<20 {
+			jsonResult(w, nil, fmt.Errorf("screenshot exceeds test limit"))
+			return
+		}
+		cfg, err := png.DecodeConfig(bytes.NewReader(data))
+		if err != nil || cfg.Width < 1 || cfg.Height < 1 || cfg.Width > 4096 || cfg.Height > 4096 || cfg.Width*cfg.Height > 10_000_000 {
+			jsonResult(w, nil, fmt.Errorf("invalid test screenshot"))
+			return
+		}
+		picture, err := png.Decode(bytes.NewReader(data))
+		if err != nil {
+			jsonResult(w, nil, err)
+			return
+		}
+		result := map[string]any{}
+		for name, target := range map[string]color.RGBA{"green": {R: 35, G: 122, B: 104, A: 255}, "marker": {R: 223, G: 91, B: 145, A: 255}} {
+			count, minX, minY, maxX, maxY := 0, cfg.Width, cfg.Height, -1, -1
+			for y := 0; y < cfg.Height; y++ {
+				for x := 0; x < cfg.Width; x++ {
+					red, green, blue, alpha := picture.At(x, y).RGBA()
+					near := func(value uint32, want uint8) bool {
+						delta := int(value>>8) - int(want)
+						return delta >= -2 && delta <= 2
+					}
+					if alpha == 65535 && near(red, target.R) && near(green, target.G) && near(blue, target.B) {
+						count++
+						minX, minY, maxX, maxY = min(minX, x), min(minY, y), max(maxX, x), max(maxY, y)
+					}
+				}
+			}
+			result[name] = map[string]any{"count": count, "x": minX, "y": minY, "width": max(0, maxX-minX+1), "height": max(0, maxY-minY+1)}
+		}
+		jsonResult(w, result, nil)
 	case "/__test/api":
 		h.api(w, r)
 	case "/__test/state":
@@ -297,11 +349,11 @@ func (h *host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer h.mu.Unlock()
 		reports := []epub.Report{}
 		paths := map[string]string{}
-		for _, kind := range []string{"normal", "legacy", "hostile", "malformed", "invalid"} {
+		for _, kind := range []string{"normal", "legacy", "hostile", "malformed", "invalid", "svgcover", "htmlcover"} {
 			reports = append(reports, h.books[kind].Report)
 			paths[kind] = h.books[kind].Path
 		}
-		jsonResult(w, map[string]any{"version": "1.4.0", "reports": reports, "paths": paths, "settings": map[string]any{"wordsPerPage": 250, "readingWPM": 250, "recursive": true, "javaPath": "java", "epubcheckJar": "", "runEpubcheck": false, "theme": "dark"}}, nil)
+		jsonResult(w, map[string]any{"version": "1.4.1", "reports": reports, "paths": paths, "settings": map[string]any{"wordsPerPage": 250, "readingWPM": 250, "recursive": true, "javaPath": "java", "epubcheckJar": "", "runEpubcheck": false, "theme": "dark"}}, nil)
 	case "/__test/reset":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)

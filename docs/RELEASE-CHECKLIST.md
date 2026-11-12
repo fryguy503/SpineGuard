@@ -111,4 +111,14 @@ Use this checklist for each version and record the exact build, operating system
 - [ ] Publish only the artifacts whose platform checks are complete. Clearly label unsigned or unnotarized packages.
 - [ ] Include version, changes, supported platform/architecture, prerequisites, known limitations, checksums, and neutral support instructions with the download.
 
+### Detached reader windows
+
+- [ ] **Read book** opens a separate native window; library controls remain usable.
+- [ ] The reader starts within the display bounds in portrait orientation, with Explore collapsed.
+- [ ] Widening or maximizing the window retains a portrait reading page; HTML and SVG covers keep their proportions.
+- [ ] Reopening a book or inspecting another finding reuses its reader and brings it forward.
+- [ ] Opening different books produces independent readers whose saved bookmarks do not overwrite each other.
+- [ ] Native window close saves the latest reading state; closing the library leaves readers usable.
+- [ ] Existing reading positions and bookmarks from 1.4.0 still load.
+
 Release record: version / source revision / toolchain / OS and architecture / test evidence / signing and notarization / artifact checksums / reader model and firmware / publication status.

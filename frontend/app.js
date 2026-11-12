@@ -30,7 +30,7 @@
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
   const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.4.0',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.4.1',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
   const collator=new Intl.Collator('en',{numeric:true,sensitivity:'base'});
   const coverAttempts=new Set(),coverQueued=new Set(),coverQueue=[];
   let coverObserver=null,coverWorkers=0;
@@ -444,11 +444,12 @@
     try{state.settings={...next,...await api.SaveSettings(next)};setTheme(state.settings.theme);$('settings-dialog').close();state.reports=state.reports.map(book=>({...book,stats:{...book.stats,estimatedPages:estimatedPages(book),readingMinutes:estimatedMinutes(book)}}));render();toast('Preferences saved. Reading estimates updated.');}catch(error){toast(errorText(error),'error');}finally{button.disabled=false;}
   }
   async function exportReports(format){$('export-menu').classList.add('hidden');$('export-button').setAttribute('aria-expanded','false');try{const saved=await api.ExportReports(format);if(saved)toast(`Saved ${format.toLocaleUpperCase()} report.`);}catch(error){toast(errorText(error),'error');}}
+  async function openReaderWindow(path,issueIndex=-1){try{await api.OpenReaderWindow(path,issueIndex);}catch(error){toast(errorText(error),'error');}}
   async function reveal(path){try{await api.RevealFile(path);}catch(error){toast(errorText(error),'error');}}
 
   function wireEvents(){
     document.addEventListener('spineguard:reader-state',()=>{setBusy(state.running);if(!workBlocked())drainQueue();});
-    $('book-rows').addEventListener('dblclick',event=>{const row=event.target.closest('[data-book-index]');const book=row&&state.reports[Number(row.dataset.bookIndex)];if(book&&!workBlocked())void window.SpineGuardReader?.open(book.path);});
+    $('book-rows').addEventListener('dblclick',event=>{const row=event.target.closest('[data-book-index]');const book=row&&state.reports[Number(row.dataset.bookIndex)];if(book&&!workBlocked())void openReaderWindow(book.path);});
     $('add-button').addEventListener('click',chooseFiles);$('empty-add-button').addEventListener('click',chooseFiles);$('folder-button').addEventListener('click',chooseFolder);
     $('rescan-library-button').addEventListener('click',()=>{if(!workBlocked())void scan(state.reports.map(book=>book.path));});
     for(const view of ['list','covers'])$(`library-view-${view}`).addEventListener('click',()=>{if(workBlocked())return;state.view=view;saveLibraryPreferences();render();});
@@ -466,7 +467,7 @@
     document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{state.filter=button.dataset.filter;render();}));
     $('search-input').addEventListener('input',event=>{state.query=event.target.value.trim().toLocaleLowerCase();render();});
     $('book-rows').addEventListener('click',event=>{const row=event.target.closest('[data-book-index]');if(!row)return;state.selected=state.reports[Number(row.dataset.bookIndex)]?.path;render();});
-    $('book-detail').addEventListener('click',event=>{const book=state.reports.find(item=>item.path===state.selected);const concern=event.target.closest('[data-reader-issue]');if(concern){if(book&&!workBlocked())void window.SpineGuardReader?.open(book.path,Number(concern.dataset.readerIssue));return;}const button=event.target.closest('[data-detail-action]');if(!button)return;switch(button.dataset.detailAction){case'read':if(book&&!workBlocked())void window.SpineGuardReader?.open(book.path);break;case'close':state.selected=null;render();break;case'rescan':if(book)void scan([book.path]);break;case'repair':void repair();break;case'reveal':if(book)void reveal(book.path);break;}});
+    $('book-detail').addEventListener('click',event=>{const book=state.reports.find(item=>item.path===state.selected);const concern=event.target.closest('[data-reader-issue]');if(concern){if(book&&!workBlocked())void openReaderWindow(book.path,Number(concern.dataset.readerIssue));return;}const button=event.target.closest('[data-detail-action]');if(!button)return;switch(button.dataset.detailAction){case'read':if(book&&!workBlocked())void openReaderWindow(book.path);break;case'close':state.selected=null;render();break;case'rescan':if(book)void scan([book.path]);break;case'repair':void repair();break;case'reveal':if(book)void reveal(book.path);break;}});
     $('cancel-button').addEventListener('click',async()=>{state.cancelling=true;state.queued=[];$('cancel-button').disabled=true;$('cancel-button').textContent='Cancelling…';try{await api.CancelScan();}catch(error){toast(errorText(error),'error');}});
     $('export-button').addEventListener('click',event=>{event.stopPropagation();const open=$('export-menu').classList.toggle('hidden')===false;$('export-button').setAttribute('aria-expanded',String(open));});
     document.querySelectorAll('[data-export]').forEach(button=>button.addEventListener('click',()=>exportReports(button.dataset.export)));
@@ -523,7 +524,7 @@
     $('settings-form').elements.readingWPM.min='80';
     if(/Mac/i.test(navigator.platform))$('open-shortcut').textContent='⌘ O';
     if(window.spineguardPreview){const banner=document.createElement('div');banner.className='preview-banner';banner.textContent='Preview data — desktop interaction adapter';document.querySelector('.main-content').prepend(banner);}
-    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.4.0';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
+    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.4.1';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
     catch(error){toast(errorText(error),'error',15000);}
   }
   void init();
