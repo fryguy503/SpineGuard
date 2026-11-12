@@ -1,6 +1,6 @@
 # Validation and repair behavior
 
-SpineGuard 1.3.1 performs local structural and integrity checks. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.4.0 performs local structural and integrity checks and provides a read-only EPUB preview. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
 
@@ -63,6 +63,14 @@ These are SpineGuard resource limits and advisories, not published Kobo limits.
 | EPUBCheck report import | 32 MiB JSON and first 10,000 issue locations; omissions are described. |
 
 Scan-limit findings mean the book was not completely analyzed. Splitting an unusually large book or obtaining a better-produced edition can help; raising limits is not a repair for damaged payloads.
+
+## Reader inspection
+
+The [built-in reader](reader.md) is separate from scan validity and repair decisions. It presents sanitized local resources with EPUB.js and the system webview. Book scripts, forms, embedded frames, active SVG, network resources, and continuous CSS animation are disabled. Its read-only fallback for damaged markup does not change the original file or clear a finding.
+
+Findings carry their source file and, when known, a structured reference or anchor. Page concerns can highlight a matching element; other concerns open escaped original source around the relevant line. An unresolved target is never fabricated. A successfully rendered page does not establish EPUB conformance, exact Kobo layout, or sustained physical-device stability.
+
+Reader sessions have their own ZIP, resource, document, CSS, and source-excerpt limits, documented in the reader guide. Reader search and source inspection can be incomplete for malformed, protected, or oversized content. Positions and bookmarks are saved separately from scan reports.
 
 ## Repairs
 

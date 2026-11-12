@@ -96,6 +96,15 @@ Section
 
     !insertmacro wails.files
 
+    File "..\..\..\README.md"
+    File "..\..\..\LICENSE"
+    File "..\..\..\THIRD-PARTY-NOTICES.txt"
+    SetOutPath "$INSTDIR\docs"
+    File "..\..\..\docs\reader.md"
+    File "..\..\..\docs\validation.md"
+    File "..\..\..\docs\RELEASE-CHECKLIST.md"
+    SetOutPath $INSTDIR
+
     CreateShortcut "$SMPROGRAMS\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
     CreateShortCut "$DESKTOP\${INFO_PRODUCTNAME}.lnk" "$INSTDIR\${PRODUCT_EXECUTABLE}"
 

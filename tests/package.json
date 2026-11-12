@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test --test-concurrency=1 ui-smoke.mjs",
+    "test": "node --test --test-concurrency=1 ui-smoke.mjs reader-smoke.mjs",
     "install-browser": "playwright install chromium"
   },
   "devDependencies": {

@@ -26,6 +26,10 @@ if [[ "$arch" == universal ]]; then
 else
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath -ldflags '-s -w' -o build/bin/spineguard-cli ./cmd/spineguard-cli
 fi
+resources=build/bin/SpineGuard.app/Contents/Resources
+mkdir -p "$resources/docs"
+cp README.md LICENSE THIRD-PARTY-NOTICES.txt "$resources/"
+cp docs/reader.md docs/validation.md docs/RELEASE-CHECKLIST.md "$resources/docs/"
 codesign --force --deep --sign - build/bin/SpineGuard.app
 codesign --force --sign - build/bin/spineguard-cli
 codesign --verify --deep --strict build/bin/SpineGuard.app

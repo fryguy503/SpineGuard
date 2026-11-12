@@ -244,7 +244,7 @@ func (a *archive) inspectContent(name string, b []byte) contentInfo {
 		}
 	}
 	for _, issue := range c.issues {
-		a.issue(issue.Code, issue.Severity, issue.Title, issue.Detail, name, false)
+		a.issueReference(issue.Code, issue.Severity, issue.Title, issue.Detail, name, issue.Reference, issue.Anchor)
 	}
 	c.info.words = wordCount(c.text.String())
 	return c.info
@@ -320,7 +320,11 @@ func (c *contentCollector) start(tag, space string, attrs map[string]string) err
 	}
 	for id := range actualIDs {
 		if c.actualIDs[id] > 0 {
+			before := len(c.issues)
 			c.note("CONTENT_DUPLICATE_ID", "Duplicate content identifier", "Links to this identifier may be ambiguous: "+id)
+			if len(c.issues) == before+1 && c.issues[before].Code == "CONTENT_DUPLICATE_ID" {
+				c.issues[before].Anchor = id
+			}
 		}
 		c.actualIDs[id]++
 	}
@@ -586,23 +590,33 @@ func (a *archive) checkReferences(name string, refs []reference, contents map[st
 		}
 		target, fragment, external, err := resolveReference(name, ref.href)
 		if err != nil {
-			a.issue("LINK_PATH", "error", "Invalid resource path", ref.href+": "+err.Error(), name, false)
+			a.issueReference("LINK_PATH", "error", "Invalid resource path", ref.href+": "+err.Error(), name, ref.href, "")
 			continue
 		}
 		if external {
 			if !(ref.attribute == "a@href" || ref.attribute == "area@href") && !(strings.HasPrefix(ref.href, "data:") || strings.HasPrefix(ref.href, "mailto:")) {
-				a.issue("RESOURCE_REMOTE", "warning", "Resource requires a network connection", ref.href, name, false)
+				a.issueReference("RESOURCE_REMOTE", "warning", "Resource requires a network connection", ref.href, name, ref.href, "")
 			}
 			continue
 		}
 		if _, ok := a.files[target]; !ok {
-			a.issue("LINK_MISSING", "error", "Linked resource is missing", ref.href+" resolves to "+target, name, false)
+			a.issueReference("LINK_MISSING", "error", "Linked resource is missing", ref.href+" resolves to "+target, name, ref.href, fragment)
 			continue
 		}
 		if fragment != "" {
 			if content, ok := contents[target]; ok && !content.ids[fragment] {
-				a.issue("LINK_FRAGMENT", "warning", "Link target identifier is missing", ref.href, name, false)
+				a.issueReference("LINK_FRAGMENT", "warning", "Link target identifier is missing", ref.href, name, ref.href, fragment)
 			}
 		}
+	}
+}
+
+// Keep machine-readable locations separate from the finding's explanatory text.
+func (a *archive) issueReference(code, severity, title, detail, file, ref, anchor string) {
+	before := len(a.report.Issues)
+	a.issue(code, severity, title, detail, file, false)
+	if len(a.report.Issues) == before+1 && a.report.Issues[before].Code == code {
+		a.report.Issues[before].Reference = ref
+		a.report.Issues[before].Anchor = anchor
 	}
 }

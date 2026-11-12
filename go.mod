@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/tdewolff/parse/v2 v2.8.20
 	github.com/wailsapp/wails/v2 v2.17.0
 	golang.org/x/net v0.62.0
 	golang.org/x/text v0.43.0

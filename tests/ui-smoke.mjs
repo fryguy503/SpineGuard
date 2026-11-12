@@ -94,6 +94,11 @@ before(async () => {
     ['/index.html', ['index.html', 'text/html; charset=utf-8']],
     ['/app.js', ['app.js', 'text/javascript; charset=utf-8']],
     ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+    ['/reader.js', ['reader.js', 'text/javascript; charset=utf-8']],
+    ['/reader.css', ['reader.css', 'text/css; charset=utf-8']],
+    ['/vendor/epubjs/epub.min.js', ['vendor/epubjs/epub.min.js', 'text/javascript; charset=utf-8']],
+    ['/vendor/epubjs/LICENSE', ['vendor/epubjs/LICENSE', 'text/plain; charset=utf-8']],
+    ['/vendor/epubjs/THIRD-PARTY-LICENSES.txt', ['vendor/epubjs/THIRD-PARTY-LICENSES.txt', 'text/plain; charset=utf-8']],
   ]);
   server = createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://localhost').pathname;
@@ -170,7 +175,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.3.1', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.4.0', settings, reports, warning: config.startupWarning || '' };
       },
       async GetBookCover(path){
         invoke('GetBookCover',[path]);

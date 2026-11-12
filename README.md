@@ -1,10 +1,10 @@
 # SpineGuard
 
-**EPUB health checks, reading statistics, and conservative repairs for Windows and macOS.**
+**EPUB health checks, a built-in reader, reading statistics, and conservative repairs for Windows and macOS.**
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.3.1**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.4.0**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
@@ -33,6 +33,14 @@ Version 1.3.1 also repairs obsolete Cover links in an EPUB 2 table of contents w
 Use **Preferences** to choose a theme, words per estimated page, reading speed, subfolder scanning, and optional EPUBCheck settings. Keyboard shortcuts: **Ctrl/Command+O** adds books, **/** searches, and **Esc** closes a dialog.
 
 A clean built-in result means no issues were detected by the checks that ran. It does not certify full EPUB conformance or guarantee that a particular reader will never restart. If content is missing or compressed data is damaged, obtain a fresh copy from its provider. Persistent Kobo restarts can also have device, firmware, or library causes.
+
+## Read and inspect a book
+
+Select a scanned book and choose **Read book** to read it with page turns or continuous scrolling. Use the table of contents, chapter navigation, text search, bookmarks, and reading controls to inspect its layout. Your reading position and bookmarks are saved on this computer.
+
+Choose **Inspect** on a finding to open the relevant page or original file. When a broken link or identifier has a known location, the reader highlights it; package, stylesheet, navigation, and removed interactive content can be inspected in **Source**. A missing resource remains unavailable rather than being replaced with invented content. Use the **Files** view to inspect original book files.
+
+The reader is read-only and works offline. It preserves passive publisher styling, local images, and supported fonts while disabling book scripts, remote resources, forms, and other active content. Its layout uses a bundled EPUB.js renderer and your system webview, so it is a useful preview rather than a Kobo firmware emulator. See the [reader guide](docs/reader.md) for controls, troubleshooting, and limits.
 
 ## Statistics
 
@@ -64,7 +72,7 @@ Preferences and up to 2,000 recent reports are saved in:
 - Windows: `%APPDATA%\SpineGuard`
 - macOS: `~/Library/Application Support/SpineGuard`
 
-Set `SPINEGUARD_CONFIG_DIR` before launching to use another directory. `settings.json` stores preferences; `library.json` stores book metadata, findings, statistics, timestamps, and local file paths. Cover thumbnails are omitted from saved history and return after a rescan. The system webview can maintain its own application cache.
+Set `SPINEGUARD_CONFIG_DIR` before launching to use another directory. `settings.json` stores preferences; `library.json` stores book metadata, findings, statistics, timestamps, and local file paths. `reader-state.json` stores reading positions and bookmarks for up to 200 books, keyed to each file's content and path. Cover thumbnails are omitted from saved history and return after a rescan. The system webview can maintain its own application cache.
 
 There is no account, book upload, or analytics service. JSON exports contain full reports and can include an inline cover thumbnail when one is available in memory. CSV exports contain summary fields and local paths; cells beginning with formula-triggering characters receive an apostrophe prefix for spreadsheet safety. Review exported paths before sharing a report.
 
@@ -94,7 +102,7 @@ Exit codes: **0** no errors detected, **1** book errors found, **2** usage/tool 
 
 ## Build from source
 
-Install **Go 1.26 or later**. Builds pin **Wails v2.17.0**; the scripts install it if missing. The interface is plain HTML/CSS/JavaScript, so this application's build has no Node/npm or frontend dependency-install step. Go dependencies and the Wails CLI require network access on a fresh development machine.
+Install **Go 1.26 or later**. Builds pin **Wails v2.17.0**; the scripts install it if missing. The interface is plain HTML/CSS/JavaScript with a vendored EPUB.js 0.3.93 browser bundle, so the application build has no Node/npm or frontend dependency-install step. Go dependencies and the Wails CLI require network access on a fresh development machine. The shipped application does not fetch reader code from a CDN.
 
 - **Windows 10/11 x64:** Microsoft WebView2 Runtime is required to run the desktop app. If absent, the Windows build offers the official runtime download page and exits. Install **NSIS 3** only if building an installer.
 - **macOS:** Build on a Mac with Xcode Command Line Tools (`xcode-select --install`). The script defaults to the host's architecture. Pass `universal` to build one app and CLI containing both Intel and Apple Silicon slices. Packaged apps require macOS 13 or later; oldest-supported-OS runtime compatibility requires its own testing.
@@ -129,8 +137,19 @@ go build -o spineguard-cli ./cmd/spineguard-cli
 
 To run the optional real-tool integration test, set `SPINEGUARD_EPUBCHECK_JAR` to a local EPUBCheck JAR and optionally `SPINEGUARD_JAVA_PATH`, then run `go test ./internal/epubcheck`. Normal tests use local fixtures and do not require Java.
 
+The optional browser suite requires Node.js 20 or later, Go on `PATH`, and Playwright Chromium. It starts a local Go fixture host and tests the actual bundled reader against synthetic books:
+
+```sh
+cd tests
+npm ci
+npx playwright install chromium
+npm test
+```
+
+These are development tools and are not installed or launched by the packaged application.
+
 ## Project layout
 
-`internal/epub` contains archive checks, content analysis, and repairs; `internal/epubcheck` adapts the optional Java validator; `internal/library` manages settings, history, discovery, and export. `frontend` contains the desktop interface; `cmd/spineguard-cli` contains the CLI; `scripts` contains native build helpers.
+`internal/epub` contains archive checks, content analysis, and repairs; `internal/epubcheck` adapts the optional Java validator; `internal/library` manages settings, history, discovery, and export. `internal/reader` provides bounded read-only book sessions, sanitization, search, source inspection, and reading-state storage. `frontend` contains the desktop interface and vendored reader; `cmd/spineguard-cli` contains the CLI; `scripts` contains native build helpers.
 
-Licensed under the [MIT License](LICENSE). For a problem report, include the app version, operating system, finding codes, and whether EPUBCheck ran. Share a book only when you have permission to distribute it.
+Licensed under the [MIT License](LICENSE), with [third-party reader notices](THIRD-PARTY-NOTICES.txt). For a problem report, include the app version, operating system, finding codes, and whether EPUBCheck ran. Share a book only when you have permission to distribute it.

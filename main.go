@@ -3,7 +3,9 @@ package main
 import (
 	"embed"
 	"log"
+	"net/http"
 	"runtime"
+	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/menu"
@@ -27,8 +29,16 @@ func main() {
 	err := wails.Run(&options.App{
 		Title: "SpineGuard", Width: 1320, Height: 860, MinWidth: 980, MinHeight: 680,
 		BackgroundColour: options.NewRGB(15, 20, 30),
-		AssetServer:      &assetserver.Options{Assets: assets},
-		OnStartup:        app.startup, OnDomReady: app.domReady, OnShutdown: app.shutdown,
+		AssetServer: &assetserver.Options{Assets: assets, Middleware: func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/__reader/") {
+					app.reader.ServeHTTP(w, r)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}},
+		OnStartup: app.startup, OnDomReady: app.domReady, OnShutdown: app.shutdown,
 		Menu: appMenu, Bind: []interface{}{app},
 		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true, DisableWebViewDrop: true},
 		Windows:     &windows.Options{Theme: windows.SystemDefault},

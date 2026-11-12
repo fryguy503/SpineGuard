@@ -2,6 +2,14 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.4.0 built-in reader
+
+- Added an offline, read-only EPUB reader using the vendored EPUB.js 0.3.93 browser renderer, including page/scroll reading, contents, document navigation, search, reading controls, saved position, and bookmarks.
+- Findings can locate their original page/reference or escaped source file. Missing resources remain unavailable, and preview fallbacks do not change book contents or validation results.
+- Go reader sessions restrict access to known EPUB resources, enforce archive/resource/markup limits, verify payload reads, expire on close, and reject a changed source file. Sanitized XHTML/CSS/SVG, permanent script disabling, content policy, and iframe sandboxing isolate book content from the application bridge and external network.
+- Reader tests use synthetic EPUBs and the actual Go resource handler and vendored renderer. The frontend CI job installs Go for its local fixture host. Windows ZIP/installer and Mac app resources include the reader guide and third-party notices.
+- Native Windows/macOS reader acceptance, signed public distribution, and sustained physical-reader behavior require the platform and device checks below. Record the final test/build results for the release revision before publishing.
+
 ## 1.3.1 stale NCX cover links
 
 - Added a narrowly evidenced correction for a missing Cover entry in the active EPUB 2 NCX: the OPF guide identifies the cover page, the navigation label matches, and the existing cover wrapper displays the uniquely declared cover image.
@@ -70,6 +78,8 @@ Use this checklist for each version and record the exact build, operating system
 - [ ] Optional real-tool test passes with `SPINEGUARD_EPUBCHECK_JAR` pointing to the complete extracted distribution.
 - [ ] Malformed XML, missing resources, CRC failures, duplicate/unsafe paths, protection metadata, image failures, and scan-limit fixtures still produce the expected findings.
 - [ ] Repair fixtures prove source preservation, no destination overwrite, no missing-resource deletion, obfuscated-font preservation, and post-repair verification.
+- [ ] Reader fixtures cover EPUB 2/3 navigation, fixed-layout/RTL content, safe SVG and fonts, source/reference jumps, missing and damaged resources, hostile markup/CSS, session expiry, cancellation, changed sources, and reading-state bounds.
+- [ ] Test reader controls, page/scroll flow, contents/files, search, bookmarks/resume, and source excerpts in both themes and minimum/standard window sizes. Confirm no book scripts, external requests, or application bridge are exposed in book frames.
 - [ ] Documentation describes the final behavior and supported limits. Customer-facing text uses neutral download/support wording and contains no private account/repository URLs.
 
 ## Native Windows acceptance
@@ -77,6 +87,7 @@ Use this checklist for each version and record the exact build, operating system
 - [ ] Run `./scripts/build.ps1` on Windows x64 and record artifact checksums.
 - [ ] Launch on a clean Windows 10/11 test environment with WebView2 installed.
 - [ ] Exercise native file/folder/save dialogs, file drop, scan/cancel/rescan, settings persistence, repair copy, reveal-file action, and JSON/CSV export.
+- [ ] Read a local EPUB in both page/scroll flows, follow concerns to pages/source, close during opening/search, and verify bookmarks/resume after restart. Confirm third-party notices and documentation are included in ZIP and installed files.
 - [ ] Restart the app; verify history, preferences, and unavailable/moved-book behavior.
 - [ ] Check missing-WebView2 behavior and clear installation guidance.
 - [ ] If distributing an installer: run `./scripts/build.ps1 -Installer` with NSIS 3, then verify installation, launch, upgrade, and uninstallation.
@@ -87,6 +98,7 @@ Use this checklist for each version and record the exact build, operating system
 - [ ] Build with `bash scripts/build-macos.sh universal` and verify both Mach-O slices, or record separate native architecture builds. Record the host on which Go tests actually ran.
 - [ ] Verify each `.app`, app ZIP, CLI architecture, and checksum.
 - [ ] Exercise the native application checks listed for Windows, including Command+O and the native menu.
+- [ ] Exercise the actual WebKit reader with publisher fonts, SVG, page/scroll layout, concern jumps, and reading-state persistence. Confirm the signed app contains documentation and third-party notices in `Contents/Resources`.
 - [ ] Verify packaged launch and settings persistence on the oldest macOS version claimed for that artifact.
 - [ ] For public distribution, replace the local ad-hoc signature with Developer ID signing, notarize the package, staple as appropriate, and verify Gatekeeper acceptance on a clean machine.
 - [ ] Recheck the final signed/notarized archive and record its checksum.

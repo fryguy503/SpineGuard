@@ -13,14 +13,16 @@ import (
 
 	"github.com/fryguy503/SpineGuard/internal/epub"
 	"github.com/fryguy503/SpineGuard/internal/library"
+	"github.com/fryguy503/SpineGuard/internal/reader"
 	wruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-const version = "1.3.1"
+const version = "1.4.0"
 
 type App struct {
 	ctx       context.Context
 	service   *library.Service
+	reader    *reader.Manager
 	operation sync.Mutex
 }
 
@@ -34,12 +36,12 @@ func NewApp() *App {
 	if portable := os.Getenv("SPINEGUARD_CONFIG_DIR"); portable != "" {
 		dir = portable
 	}
-	return &App{ctx: context.Background(), service: library.New(dir)}
+	return &App{ctx: context.Background(), service: library.New(dir), reader: reader.New(dir)}
 }
 
 func (a *App) startup(ctx context.Context)  { a.ctx = ctx }
 func (a *App) domReady(ctx context.Context) {}
-func (a *App) shutdown(ctx context.Context) { a.service.Cancel() }
+func (a *App) shutdown(ctx context.Context) { a.service.Cancel(); a.reader.Shutdown() }
 func (a *App) GetState() library.State      { return a.service.State(version) }
 func (a *App) SaveSettings(settings library.Settings) (library.Settings, error) {
 	return a.service.SaveSettings(settings)

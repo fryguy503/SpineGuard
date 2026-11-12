@@ -61,6 +61,8 @@ type Issue struct {
 	Detail         string `json:"detail"`
 	File           string `json:"file,omitempty"`
 	Line           int    `json:"line,omitempty"`
+	Reference      string `json:"reference,omitempty"`
+	Anchor         string `json:"anchor,omitempty"`
 	Repairable     bool   `json:"repairable"`
 	RepairKind     string `json:"repairKind,omitempty"`
 	RepairReason   string `json:"repairReason,omitempty"`
