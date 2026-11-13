@@ -2,15 +2,16 @@ package epub
 
 // RepairOptions selects edits on a separate copy. Reader cleanup is opt-in.
 type RepairOptions struct {
-	FixLinks           bool   `json:"fixLinks"`
-	FixDuplicateIDs    bool   `json:"fixDuplicateIds"`
-	RemoveScripts      bool   `json:"removeScripts"`
-	FixMetadata        bool   `json:"fixMetadata"`
-	Language           string `json:"language,omitempty"`
-	GenerateIdentifier bool   `json:"generateIdentifier"`
-	FixDocumentMarkup  bool   `json:"fixDocumentMarkup"`
-	NormalizeEntities  bool   `json:"normalizeEntities"`
-	ExpectedSHA256     string `json:"expectedSha256,omitempty"`
+	FixLinks                    bool   `json:"fixLinks"`
+	FixDuplicateIDs             bool   `json:"fixDuplicateIds"`
+	RemoveScripts               bool   `json:"removeScripts"`
+	FixMetadata                 bool   `json:"fixMetadata"`
+	Language                    string `json:"language,omitempty"`
+	GenerateIdentifier          bool   `json:"generateIdentifier"`
+	FixDocumentMarkup           bool   `json:"fixDocumentMarkup"`
+	NormalizeEntities           bool   `json:"normalizeEntities"`
+	ReplaceMissingSceneDividers bool   `json:"replaceMissingSceneDividers"`
+	ExpectedSHA256              string `json:"expectedSha256,omitempty"`
 }
 
 func DefaultRepairOptions() RepairOptions {

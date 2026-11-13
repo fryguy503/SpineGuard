@@ -79,6 +79,10 @@ const scriptedBook = {
   status:'warning',warnings:1,
   issues:[{code:'CONTENT_SCRIPT',severity:'warning',title:'Scripted content',detail:'This book contains a script.',file:'EPUB/chapter.xhtml',repairable:true,optionalRepair:true,repairKind:'reader_cleanup'}],
 };
+const dividerBook = {
+  ...cleanBook,path:'/books/missing-dividers.epub',filename:'missing-dividers.epub',title:'Missing Scene Dividers',status:'error',errors:93,
+  issues:Array.from({length:93},(_,index)=>({code:'LINK_MISSING',severity:'error',title:'Linked resource is missing',detail:'Images/star.jpg resolves to EPUB/Images/star.jpg',reference:'Images/star.jpg',file:`EPUB/chapter-${index%10}.xhtml`,repairable:true,optionalRepair:true,repairKind:'scene_dividers',repairReason:'Optional replacement can mark this scene break with * * *.'})),
+};
 const metadataBook={
   ...cleanBook,path:'/books/missing-metadata.epub',filename:'missing-metadata.epub',title:'A Book With Missing Metadata',language:'',identifier:'',status:'error',errors:2,
   issues:[
@@ -162,7 +166,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
       harness.calls.push({ name, args });
       if (config.failures?.[name]) throw new Error(config.failures[name]);
     };
-    const bulkDefaults={fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
+    const bulkDefaults={fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,replaceMissingSceneDividers:false};
     const bulkPlanFor=path=>{
       const report=reports.find(book=>book.path===path);
       const actions=report.issues.some(issue=>issue.repairable&&!issue.optionalRepair&&(issue.code.startsWith('MIMETYPE_')||issue.code==='ZIP_PREFIX'))?[{kind:'packaging',description:'Fix EPUB packaging.',count:1,requiresOptIn:false}]:[];
@@ -175,7 +179,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.4.1', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.4.2', settings, reports, warning: config.startupWarning || '' };
       },
       async GetBookCover(path){
         invoke('GetBookCover',[path]);
@@ -263,9 +267,12 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
         if(config.missingLanguage&&options.fixMetadata&&options.language)actions=[...actions,{kind:'metadata',file:'EPUB/package.opf',description:`Set the missing language to ${options.language}.`,count:1,requiresOptIn:true}];
         if(config.missingIdentity&&options.fixMetadata&&options.generateIdentifier)actions=[...actions,{kind:'metadata',file:'EPUB/package.opf',description:'Create a new publication identifier.',count:1,requiresOptIn:true}];
         if(config.entities&&options.normalizeEntities)actions=[...actions,{kind:'entities',file:'EPUB/chapter.xhtml',description:'Normalize standard HTML entities to numeric references.',count:3,requiresOptIn:true}];
+        const hasDividers=source.issues.filter(issue=>issue.code==='LINK_MISSING'&&issue.repairKind==='scene_dividers'&&issue.optionalRepair&&issue.repairable);
+        if(options.replaceMissingSceneDividers&&hasDividers.length)actions=[...actions,{kind:'scene_dividers',file:'EPUB/chapter.xhtml',description:`Replace ${hasDividers.length} missing scene divider images with * * *.`,count:hasDividers.length,requiresOptIn:true}];
         const hasScripts=source.issues.some(issue=>issue.code==='CONTENT_SCRIPT'&&issue.repairable);
         if(options.removeScripts&&hasScripts)actions=[...actions,{kind:'reader_cleanup',file:'EPUB/chapter.xhtml',description:'Remove scripts and scripted actions.',count:3,requiresOptIn:true}];
         const unresolved=source.issues.filter(issue=>{
+          if(options.replaceMissingSceneDividers&&issue.code==='LINK_MISSING'&&issue.repairKind==='scene_dividers'&&issue.optionalRepair&&issue.repairable)return false;
           if(options.removeScripts&&issue.code==='CONTENT_SCRIPT'&&issue.repairable)return false;
           if(options.fixMetadata&&options.language&&['METADATA_LANGUAGE','METADATA_LANGUAGE_INVALID'].includes(issue.code)&&issue.repairable)return false;
           if(options.fixMetadata&&options.generateIdentifier&&issue.code==='METADATA_IDENTIFIER'&&issue.repairable&&issue.optionalRepair)return false;
@@ -543,7 +550,7 @@ test('repair review defaults preserve scripts and requires explicit reader clean
   assert.match(await page.locator('#repair-script-choice').textContent(),/interactive features may stop working/);
   assert.doesNotMatch(await page.locator('#repair-plan-unresolved').textContent(),/Scripted content/,'The choice should not also appear as a manual repair');
   const initial=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='PreviewRepair'));
-  assert.deepEqual(initial.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false});
+  assert.deepEqual(initial.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,replaceMissingSceneDividers:false});
   await page.locator('[name=removeScripts]').check();
   await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
   assert.match(await page.locator('#repair-plan-actions').textContent(),/Remove interactive features/);
@@ -555,6 +562,61 @@ test('repair review defaults preserve scripts and requires explicit reader clean
   assert.equal(saved.args[1].removeScripts,true);
   assert.equal(saved.args[1].expectedSha256,'a'.repeat(64));
   await waitForCount(page,2);
+});
+
+test('missing scene divider replacement is opt-in, previews its count, and saves a checked copy',async t=>{
+  const page=await openApp(t,{reports:[dividerBook]});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await waitForReview(page);
+  const choice=page.getByRole('checkbox',{name:/Replace missing scene dividers/});
+  assert.equal(await choice.isChecked(),false);
+  assert.equal(await page.locator('#repair-divider-choice').isVisible(),true);
+  assert.match(await page.locator('#repair-divider-choice').textContent(),/Surrounding text is preserved/);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  assert.match(await page.locator('#repair-plan-summary').innerText(),/Optional change available/);
+  assert.equal(await page.locator('#repair-plan-unresolved .review-unresolved').count(),0,'An available choice must not be presented as an impossible manual fix');
+  await openAdvanced(page);
+  assert.equal(await page.locator('[data-repair-category="links"]').isVisible(),false,'Scene-divider replacement must not masquerade as automatic link correction');
+  const initial=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='PreviewRepair'));
+  assert.equal(initial.args[1].replaceMissingSceneDividers,false);
+  await choice.check();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  assert.match(await page.locator('#repair-plan-actions').innerText(),/Replace 93 missing scene dividers with \* \* \*/);
+  assert.match(await page.locator('#repair-technical').textContent(),/Selected optional change/);
+  await screenshot(page,'repair-scene-dividers');
+  await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
+  await page.locator('#result-dialog').waitFor({state:'visible'});
+  const saved=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='RepairBookWithOptions'));
+  assert.equal(saved.args[1].replaceMissingSceneDividers,true);
+  assert.equal(saved.args[1].expectedSha256,'a'.repeat(64));
+  assert.match(await page.locator('#repair-result').innerText(),/Replace 93 missing scene dividers/);
+  assert.match(await page.locator('#repair-result').innerText(),/checked again/);
+  await waitForCount(page,2);
+});
+
+test('scene divider choice resets after cancellation and is absent for ordinary missing images or blocked books',async t=>{
+  const page=await openApp(t,{reports:[dividerBook]});
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await waitForReview(page);
+  await page.locator('[name=replaceMissingSceneDividers]').check();
+  await page.waitForFunction(()=>!document.getElementById('save-repair-button').disabled);
+  await page.getByRole('button',{name:'Close repair review',exact:true}).click();
+  assert.equal(await callCount(page,'RepairBookWithOptions'),0);
+  await page.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await waitForReview(page);
+  assert.equal(await page.locator('[name=replaceMissingSceneDividers]').isChecked(),false);
+  assert.equal(await page.locator('#save-repair-button').isDisabled(),true);
+  const ordinary={...cleanBook,status:'error',errors:1,issues:[{code:'LINK_MISSING',severity:'error',title:'Linked resource is missing',detail:'Images/chart.jpg resolves to EPUB/Images/chart.jpg',file:'EPUB/chapter.xhtml',repairable:false}]};
+  const unavailable=await openApp(t,{reports:[ordinary]});
+  await unavailable.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await waitForReview(unavailable);
+  assert.equal(await unavailable.locator('#repair-divider-choice').isVisible(),false);
+  assert.match(await unavailable.locator('#repair-plan-unresolved').innerText(),/Still needs attention/);
+  const blocked=await openApp(t,{reports:[dividerBook],blockedReason:'This book is protected and cannot be repackaged.'});
+  await blocked.getByRole('button',{name:'Review repairs',exact:true}).click();
+  await waitForReview(blocked);
+  assert.equal(await blocked.locator('#repair-divider-choice').isVisible(),false);
+  assert.equal(await blocked.locator('#save-repair-button').isDisabled(),true);
 });
 
 test('safe repair choices, unfixable findings, and protected-book reasons remain reviewable',async t=>{
@@ -604,7 +666,7 @@ test('detected language stays a suggestion until selected and new identities rem
   await page.getByRole('button',{name:'Save repaired copy',exact:true}).click();
   await page.locator('#result-dialog').waitFor({state:'visible'});
   const saved=await page.evaluate(()=>window.__testHarness.calls.find(c=>c.name==='RepairBookWithOptions'));
-  assert.deepEqual(saved.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'en',generateIdentifier:true,fixDocumentMarkup:true,normalizeEntities:false,expectedSha256:'a'.repeat(64)});
+  assert.deepEqual(saved.args[1],{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'en',generateIdentifier:true,fixDocumentMarkup:true,normalizeEntities:false,replaceMissingSceneDividers:false,expectedSha256:'a'.repeat(64)});
 });
 
 test('language typing invalidates the previous plan immediately and debounces previews',async t=>{
@@ -955,10 +1017,34 @@ test('bulk review repairs only selected ready books and preserves originals and 
   const save=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='RepairBooks'));
   assert.equal(save.args[0].length,1);
   assert.equal(save.args[0][0].path,warningBook.path);
-  assert.deepEqual(save.args[0][0].options,{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,expectedSha256:'a'.repeat(64)});
+  assert.deepEqual(save.args[0][0].options,{fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,replaceMissingSceneDividers:false,expectedSha256:'a'.repeat(64)});
   await waitForCount(page,4);
   assert.match(await page.locator('#bulk-summary').innerText(),/1 saved/);
   await screenshot(page,'bulk-results');
+});
+
+test('bulk repairs keep scene-divider replacement off and send divider-only books to individual review',async t=>{
+  const page=await openApp(t,{reports:[warningBook,dividerBook]});
+  await selectForBulk(page,[warningBook.title,dividerBook.title]);
+  await page.waitForFunction(()=>!document.getElementById('bulk-save-button').disabled);
+  assert.equal(await page.locator('#bulk-items input[type=checkbox]:checked').count(),1);
+  const divider=page.locator('.bulk-book-item').filter({hasText:dividerBook.title});
+  assert.match(await divider.innerText(),/Needs individual review/);
+  await page.locator('#bulk-save-button').click();
+  await page.getByText('Copies saved',{exact:true}).waitFor();
+  const saved=await page.evaluate(()=>window.__testHarness.calls.find(call=>call.name==='RepairBooks'));
+  assert.equal(saved.args[0].length,1);
+  assert.equal(saved.args[0][0].path,warningBook.path);
+  assert.equal(saved.args[0][0].options.replaceMissingSceneDividers,false);
+  const individual=await openApp(t,{reports:[dividerBook]});
+  await selectForBulk(individual,[dividerBook.title]);
+  await individual.locator('[data-bulk-review-index]').waitFor();
+  await individual.locator('[data-bulk-review-index]').click();
+  await individual.locator('#repair-review-dialog').waitFor({state:'visible'});
+  await waitForReview(individual);
+  assert.equal(await individual.locator('#repair-divider-choice').isVisible(),true);
+  assert.equal(await individual.locator('[name=replaceMissingSceneDividers]').isChecked(),false);
+  assert.equal(await individual.locator('#save-repair-button').isDisabled(),true);
 });
 
 test('bulk preview cancellation unlocks controls without saving or losing queued drops',async t=>{

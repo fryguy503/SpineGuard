@@ -262,3 +262,29 @@ func TestWarningsDoNotFailCLIAndUppercaseRepairOutput(t *testing.T) {
 		t.Fatalf("uppercase output extension rejected: exit %d stderr %q", code, stderr)
 	}
 }
+
+func TestCLIOptionalMissingSceneDividerRepair(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat(`<p class="star"><span><img src="Images/star.jpg" alt="star.jpg"/></span></p>`, 2)
+	input := cliBook(t, dir, "dividers.epub", "application/epub+zip", body)
+	code, stdout, stderr := captureCommand(t, "repair", "-dry-run", input)
+	if code != 0 || stderr != "" {
+		t.Fatalf("default preview: %d %s", code, stderr)
+	}
+	var plain epub.RepairPlan
+	if err := json.Unmarshal([]byte(stdout), &plain); err != nil {
+		t.Fatal(err)
+	}
+	if plain.Options.ReplaceMissingSceneDividers || len(plain.Actions) != 0 || len(plain.Unresolved) != 2 {
+		t.Fatalf("default CLI silently selected divider replacement: %+v", plain)
+	}
+	output := filepath.Join(dir, "with-markers.epub")
+	code, stdout, stderr = captureCommand(t, "repair", "-replace-missing-scene-dividers", "-out", output, input)
+	if code != 0 || stderr != "" {
+		t.Fatalf("opted-in CLI repair: %d %s %s", code, stdout, stderr)
+	}
+	var result epub.RepairResult
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil || result.Report.Errors != 0 || result.OutputPath != output {
+		t.Fatalf("CLI repair output: %+v %v", result, err)
+	}
+}

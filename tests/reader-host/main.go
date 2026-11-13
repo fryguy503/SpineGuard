@@ -353,7 +353,7 @@ func (h *host) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			reports = append(reports, h.books[kind].Report)
 			paths[kind] = h.books[kind].Path
 		}
-		jsonResult(w, map[string]any{"version": "1.4.1", "reports": reports, "paths": paths, "settings": map[string]any{"wordsPerPage": 250, "readingWPM": 250, "recursive": true, "javaPath": "java", "epubcheckJar": "", "runEpubcheck": false, "theme": "dark"}}, nil)
+		jsonResult(w, map[string]any{"version": "1.4.2", "reports": reports, "paths": paths, "settings": map[string]any{"wordsPerPage": 250, "readingWPM": 250, "recursive": true, "javaPath": "java", "epubcheckJar": "", "runEpubcheck": false, "theme": "dark"}}, nil)
 	case "/__test/reset":
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)

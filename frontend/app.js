@@ -29,8 +29,8 @@
   const number = value => Number(value || 0).toLocaleString();
   const bytes = value => { const n=Number(value||0); if(n<1024)return `${n} B`; if(n<1048576)return `${(n/1024).toFixed(1)} KB`; return `${(n/1048576).toFixed(1)} MB`; };
   const defaults = {wordsPerPage:250,readingWPM:250,recursive:true,epubcheckJar:'',javaPath:'java',runEpubcheck:false,theme:'dark'};
-  const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false};
-  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.4.1',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
+  const repairDefaults = {fixLinks:true,fixDuplicateIds:true,removeScripts:false,fixMetadata:true,language:'',generateIdentifier:false,fixDocumentMarkup:true,normalizeEntities:false,replaceMissingSceneDividers:false};
+  const state = {reports:[],settings:{...defaults},selected:null,filter:'all',query:'',running:false,repairing:false,cancelling:false,repairedPath:'',version:'1.4.2',progress:{index:0,total:0},queued:[],reviewPath:'',repairPlan:null,reviewReport:null,reviewSHA:'',reviewKinds:new Set(),reviewError:'',reviewOptions:{...repairDefaults},reviewSuggestions:{},previewing:false,previewWorker:false,previewTimer:null,reviewGeneration:0,view:'list',group:'none',sort:'recent',selecting:false,selectedBooks:new Set(),bulkOpen:false,bulkWorking:false,bulkPhase:'preview',bulkPaths:[],bulkItems:[],bulkIncluded:new Set(),bulkResult:null,bulkError:'',bulkCancelled:false,bulkCancelling:false,bulkProgress:{}};
   const collator=new Intl.Collator('en',{numeric:true,sensitivity:'base'});
   const coverAttempts=new Set(),coverQueued=new Set(),coverQueue=[];
   let coverObserver=null,coverWorkers=0;
@@ -258,15 +258,18 @@
       language:issues.some(issue=>/^METADATA_LANGUAGE(?:_INVALID)?$/.test(issue.code)&&eligible(issue)),
       identity:issues.some(issue=>issue.code==='METADATA_IDENTIFIER'&&issue.optionalRepair&&eligible(issue)),
       scripts:issues.some(issue=>['CONTENT_SCRIPT','CONTENT_EVENT_HANDLER','CONTENT_JAVASCRIPT_URL'].includes(issue.code)&&eligible(issue)),
+      dividers:issues.some(issue=>issue.code==='LINK_MISSING'&&issue.repairKind==='scene_dividers'&&issue.optionalRepair&&eligible(issue)),
     };
   }
   function simpleRepairActions(actions){
     // Repacking accompanies every edit; show it as a fix only when it is the only action.
     const visible=actions.some(action=>action.kind!=='packaging')?actions.filter(action=>action.kind!=='packaging'):actions;
-    const labels={links:'Fix broken links',duplicate_ids:'Fix book structure',document_markup:'Fix formatting problems',metadata:'Correct book details',entities:'Standardize special characters',reader_cleanup:'Remove interactive features',packaging:'Fix EPUB file structure',xml:'Fix document formatting'};
+    const dividerCount=visible.filter(action=>action.kind==='scene_dividers').reduce((sum,action)=>sum+Number(action.count||0),0);
+    const labels={links:'Fix broken links',duplicate_ids:'Fix book structure',document_markup:'Fix formatting problems',metadata:'Correct book details',entities:'Standardize special characters',reader_cleanup:'Remove interactive features',scene_dividers:dividerCount?`Replace ${number(dividerCount)} missing scene ${dividerCount===1?'divider':'dividers'} with * * *`:'Replace missing scene dividers with * * *',packaging:'Fix EPUB file structure',xml:'Fix document formatting'};
     return [...new Set(visible.map(action=>labels[action.kind]||'Apply additional repairs'))];
   }
   function manualRepairHelp(issue){
+    if(issue.repairKind==='scene_dividers'&&issue.repairable&&issue.optionalRepair)return 'Select Replace missing scene dividers to use * * * markers in the repaired copy.';
     const off={LINK_MISSING:'fixLinks',LINK_FRAGMENT:'fixLinks',CONTENT_DUPLICATE_ID:'fixDuplicateIds',OPF_GUIDE_EMPTY:'fixDocumentMarkup',SVG_PRESERVE_ASPECT_RATIO:'fixDocumentMarkup',METADATA_LANGUAGE:'fixMetadata',METADATA_LANGUAGE_INVALID:'fixMetadata',METADATA_IDENTIFIER:'fixMetadata',NCX_IDENTIFIER_MISMATCH:'fixMetadata'}[issue.code];
     if(issue.repairable&&off&&!state.reviewOptions[off])return 'This fix is switched off. Turn it back on in Advanced options to include it.';
     if(issue.code==='LINK_MISSING'||issue.code==='LINK_FRAGMENT')return 'The correct destination could not be found. A corrected copy of the book may be needed.';
@@ -289,6 +292,7 @@
     $('repair-language-choice').classList.toggle('hidden',!context.language||!!blocked);
     $('repair-identity-choice').classList.toggle('hidden',!context.identity||!!blocked);
     $('repair-script-choice').classList.toggle('hidden',!context.scripts||!!blocked);
+    $('repair-divider-choice').classList.toggle('hidden',!context.dividers||!!blocked);
     $('repair-language').disabled=metadataDisabled;$('repair-language-select').disabled=metadataDisabled;
     $('repair-options').elements.namedItem('generateIdentifier').disabled=metadataDisabled;
     const detected=typeof state.reviewSuggestions.language==='string'?state.reviewSuggestions.language:'';
@@ -298,7 +302,7 @@
     $('use-detected-language').disabled=!detected||metadataDisabled||pending;
     $('language-suggestion-source').textContent=detected?(sources.length?`Language suggestion: ${detected}. Found in: ${sources.join(', ')}`:`Language suggestion: ${detected}, from the book’s language markup.`):'';
     const categories={
-      links:context.issues.some(issue=>['LINK_MISSING','LINK_FRAGMENT'].includes(issue.code)&&issue.repairable),
+      links:context.issues.some(issue=>['LINK_MISSING','LINK_FRAGMENT'].includes(issue.code)&&issue.repairable&&issue.repairKind!=='scene_dividers'),
       duplicate_ids:context.issues.some(issue=>issue.code==='CONTENT_DUPLICATE_ID'&&issue.repairable),
       document_markup:context.issues.some(issue=>['OPF_GUIDE_EMPTY','SVG_PRESERVE_ASPECT_RATIO'].includes(issue.code)&&issue.repairable),
       metadata:context.issues.some(issue=>(/^METADATA_/.test(issue.code)||issue.code==='NCX_IDENTIFIER_MISMATCH')&&issue.repairable),
@@ -311,12 +315,12 @@
     if(state.reviewError){$('repair-plan-summary').innerHTML=`<div class="repair-review-message error" role="alert"><strong>Could not prepare repairs</strong><p>${esc(state.reviewError)}</p><p>Correct your choice or refresh the review to try again.</p></div>`;$('repair-plan-actions').innerHTML='';$('repair-plan-unresolved').innerHTML='';return;}
     const needsLanguage=context.language&&state.reviewOptions.fixMetadata&&!state.reviewOptions.language;
     const switchedOff=Object.entries(categories).some(([kind,available])=>available&&!state.reviewOptions[{links:'fixLinks',duplicate_ids:'fixDuplicateIds',document_markup:'fixDocumentMarkup',metadata:'fixMetadata'}[kind]]);
-    const heading=blocked?'This copy cannot be repaired automatically':actions.length?'Ready to save a repaired copy':needsLanguage?'Choose the book’s language':switchedOff?'Repairs are switched off':context.identity?'A book identifier is missing':context.scripts?'Optional change available':unresolved.length?'These problems need a manual fix':'Nothing to fix';
-    const help=blocked?'Try a fresh download or ask the book’s provider for a corrected copy.':actions.length?'We’ll apply the fixes below and check the new copy.':needsLanguage?'Confirm the language below to fix the missing or invalid book detail.':switchedOff?'Turn fixes back on in Advanced options to include them.':context.identity?'You can add one to a separate copy below.':context.scripts?'You can remove interactive features from a separate copy.':unresolved.length?'SpineGuard cannot repair them safely. See the next steps below.':'The current check found no problems that need a repair.';
+    const heading=blocked?'This copy cannot be repaired automatically':actions.length?'Ready to save a repaired copy':needsLanguage?'Choose the book’s language':switchedOff?'Repairs are switched off':context.identity?'A book identifier is missing':context.scripts||context.dividers?'Optional change available':unresolved.length?'These problems need a manual fix':'Nothing to fix';
+    const help=blocked?'Try a fresh download or ask the book’s provider for a corrected copy.':actions.length?'We’ll apply the fixes below and check the new copy.':needsLanguage?'Confirm the language below to fix the missing or invalid book detail.':switchedOff?'Turn fixes back on in Advanced options to include them.':context.identity?'You can add one to a separate copy below.':context.dividers?'Select the divider replacement below to use * * * scene breaks in a separate copy.':context.scripts?'You can remove interactive features from a separate copy.':unresolved.length?'SpineGuard cannot repair them safely. See the next steps below.':'The current check found no problems that need a repair.';
     $('repair-plan-summary').innerHTML=`<div class="repair-review-message${blocked?' error':''}"><strong>${esc(heading)}</strong><p>${esc(help)}</p></div>`;
     const simpleActions=simpleRepairActions(actions);
     $('repair-plan-actions').innerHTML=simpleActions.length?`<h3>Fixes to apply</h3><ul class="repair-simple-list">${simpleActions.map(label=>`<li><span>${icon('check')}</span>${esc(label)}</li>`).join('')}</ul>`:'';
-    const isChoice=issue=>!blocked&&issue.repairable===true&&((context.language&&/^METADATA_LANGUAGE(?:_INVALID)?$/.test(issue.code))||(context.identity&&issue.optionalRepair&&issue.code==='METADATA_IDENTIFIER')||(context.scripts&&['CONTENT_SCRIPT','CONTENT_EVENT_HANDLER','CONTENT_JAVASCRIPT_URL'].includes(issue.code)));
+    const isChoice=issue=>!blocked&&issue.repairable===true&&((context.language&&/^METADATA_LANGUAGE(?:_INVALID)?$/.test(issue.code))||(context.identity&&issue.optionalRepair&&issue.code==='METADATA_IDENTIFIER')||(context.scripts&&['CONTENT_SCRIPT','CONTENT_EVENT_HANDLER','CONTENT_JAVASCRIPT_URL'].includes(issue.code))||(context.dividers&&issue.code==='LINK_MISSING'&&issue.repairKind==='scene_dividers'&&issue.optionalRepair));
     const manual=unresolved.filter(issue=>!isChoice(issue));
     const groupedManual=new Map();
     for(const issue of manual){const key=issue.code+'\x00'+(issue.title||'')+'\x00'+manualRepairHelp(issue);if(!groupedManual.has(key))groupedManual.set(key,{issue,count:0});groupedManual.get(key).count++;}
@@ -524,7 +528,7 @@
     $('settings-form').elements.readingWPM.min='80';
     if(/Mac/i.test(navigator.platform))$('open-shortcut').textContent='⌘ O';
     if(window.spineguardPreview){const banner=document.createElement('div');banner.className='preview-banner';banner.textContent='Preview data — desktop interaction adapter';document.querySelector('.main-content').prepend(banner);}
-    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.4.1';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
+    try{const result=await api.GetState();state.settings={...defaults,...(result?.settings||{})};state.version=result?.version||'1.4.2';state.reports=Array.isArray(result?.reports)?result.reports:[];state.selected=state.reports[0]?.path||null;setTheme(state.settings.theme);$('app-version').textContent=`v${state.version}`;render();if(result?.warning)toast(result.warning,'error',14000);}
     catch(error){toast(errorText(error),'error',15000);}
   }
   void init();

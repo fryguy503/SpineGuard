@@ -162,6 +162,19 @@ func collectRepairEdits(ctx context.Context, a *archive, choices RepairOptions) 
 		}
 	}
 	notes = append(notes, linkNotes...)
+	dividerModified, dividerActions, dividerNotes := planSceneDividerDocuments(ctx, working, files, choices)
+	for name, b := range dividerModified {
+		if editable(name) {
+			working[name] = b
+			modified[name] = b
+		}
+	}
+	for _, action := range dividerActions {
+		if editable(action.File) {
+			actions = append(actions, action)
+		}
+	}
+	notes = append(notes, dividerNotes...)
 	cleanupModified, cleanupActions, cleanupNotes := planCleanupDocuments(ctx, working, choices)
 	for name, b := range cleanupModified {
 		if editable(name) {

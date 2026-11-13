@@ -121,4 +121,12 @@ Use this checklist for each version and record the exact build, operating system
 - [ ] Native window close saves the latest reading state; closing the library leaves readers usable.
 - [ ] Existing reading positions and bookmarks from 1.4.0 still load.
 
+### Optional missing scene-divider replacement
+
+- [ ] Eligible repeated missing ornaments offer **Replace missing scene dividers**, unchecked by default.
+- [ ] Selecting it refreshes the reviewed count; cancelling and reopening resets the choice.
+- [ ] Missing illustrations and meaningful image descriptions remain unchanged and unresolved.
+- [ ] The repaired copy clears only supported findings and retains the book's prose, reading order, and other resource payloads.
+- [ ] Bulk defaults leave replacement off and permit individual review.
+
 Release record: version / source revision / toolchain / OS and architecture / test evidence / signing and notarization / artifact checksums / reader model and firmware / publication status.

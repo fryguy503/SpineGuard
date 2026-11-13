@@ -1,6 +1,6 @@
 # Validation and repair behavior
 
-SpineGuard 1.4.0 performs local structural and integrity checks and provides a read-only EPUB preview. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.4.2 performs local structural and integrity checks and provides a read-only EPUB preview. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
 
@@ -89,6 +89,8 @@ Supported actions are:
 7. Remove a truly empty optional OPF guide, and canonicalize a provable case-only SVG alignment value. Other structure and geometry are preserved.
 8. Optionally normalize recognized standard named character entities to numeric references in text and attributes. Comments, CDATA, processing instructions, and the DOCTYPE remain unchanged. Unknown/custom entity definitions are preserved.
 9. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings. Content edits use source-byte patches instead of whole-document HTML serialization.
+
+An optional **Replace missing scene dividers** action handles a narrow missing-image case: a repeated missing local ornament is the sole content of a clearly identified scene-divider paragraph. It requires strictly editable declared XHTML, conservative ornament names and wrapper classes, and no meaningful image description, image identifier, link, or other ambiguous role. Proven path corrections take priority. A mixed eligible/substantive reference group is left unchanged. When selected, only eligible image spans become `* * *`; their wrapper styling, surrounding text, and archive resources are retained. The option is off by default and excluded from bulk defaults.
 
 SpineGuard does not guess a language, reconstruct missing content, or invent chapter navigation. New publication identity requires an explicit choice. It does not close broken tags, reconstruct truncated compressed data, simplify CSS, resize images, or convert EPUB to KEPUB. Scripts remain unless reader cleanup is selected. A successful repair may leave content or conformance errors to resolve.
 

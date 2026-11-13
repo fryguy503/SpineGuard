@@ -25,7 +25,7 @@ func run(args []string) int {
 	defer cancel()
 	switch args[0] {
 	case "version", "--version", "-version":
-		fmt.Println("SpineGuard 1.4.1")
+		fmt.Println("SpineGuard 1.4.2")
 		return 0
 	case "help", "--help", "-h":
 		usage()
@@ -67,6 +67,8 @@ Repair options:
   -generate-identifier   Explicitly create an identifier when none is usable
   -fix-document-markup   Fix provable empty-guide/SVG issues (default true)
   -normalize-entities    Optionally use numeric standard character references
+  -replace-missing-scene-dividers
+                         Opt-in text markers for repeated missing scene ornaments
   -expect-sha256 hash    Require the source hash returned by a preview
 
 Exit codes: 0 no errors detected; 1 book errors found; 2 usage/tool failure;
@@ -162,6 +164,7 @@ func repair(ctx context.Context, args []string) int {
 	flags.BoolVar(&choices.GenerateIdentifier, "generate-identifier", false, "explicitly create an identifier when no usable value exists")
 	flags.BoolVar(&choices.FixDocumentMarkup, "fix-document-markup", true, "fix provable empty-guide and SVG attribute issues")
 	flags.BoolVar(&choices.NormalizeEntities, "normalize-entities", false, "optionally normalize standard named entities to numeric references")
+	flags.BoolVar(&choices.ReplaceMissingSceneDividers, "replace-missing-scene-dividers", false, "replace proven repeated missing decorative scene-divider images with text markers")
 	flags.StringVar(&choices.ExpectedSHA256, "expect-sha256", "", "require the source hash returned by preview")
 	if err := flags.Parse(args); err != nil {
 		return 2

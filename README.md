@@ -4,7 +4,7 @@
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.4.1**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.4.2**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
@@ -27,6 +27,8 @@ Version 1.2.0 adds language-tag checks, recovery of existing publication-identif
 The repair review asks only for choices relevant to the selected book. For a missing or invalid language, choose a language by name or confirm a suggestion; suggestions are never applied automatically. Removing interactive features is offered only when they are present and starts unchecked. Creating a missing book identifier also requires an explicit choice. Existing identifiers and protected font relationships are preserved.
 
 **Advanced options** and **Technical details** stay collapsed unless you need them. Advanced options include individual repair categories and optional character normalization. Technical details contain file paths, the full proposed edits, and explanations for remaining findings. Changing a choice updates the preview automatically.
+
+When a repeated scene-divider image is genuinely missing, **Review repairs** can offer **Replace missing scene dividers**. This starts unchecked. Selecting it replaces eligible decorative image references with `* * *`, retaining their paragraph styling and surrounding text in a separate copy. The review shows the replacement count. Missing illustrations, meaningful image descriptions, and ambiguous references remain for manual attention. Bulk repair leaves this option off; use **Review individually** to choose it for a book.
 
 Version 1.3.1 also repairs obsolete Cover links in an EPUB 2 table of contents when the book explicitly identifies one matching cover page and that page displays its declared cover image. This uses the existing **Fix broken links** option, including in bulk repair. Missing chapters and ambiguous destinations remain flagged for manual attention.
 
@@ -95,10 +97,12 @@ spineguard-cli repair -dry-run -language en book.epub
 spineguard-cli repair -language en -out language-fixed.epub book.epub
 spineguard-cli repair -generate-identifier -out identified.epub book.epub
 spineguard-cli repair -normalize-entities -out normalized.epub book.epub
+spineguard-cli repair -dry-run -replace-missing-scene-dividers book.epub
+spineguard-cli repair -replace-missing-scene-dividers -out dividers-fixed.epub book.epub
 spineguard-cli version
 ```
 
-`scan` supports `-format text|json|csv`, `-recursive`, `-words-per-page` (100–1,000), `-reading-wpm` (80–1,000), `-epubcheck`, and `-java`. `repair` prints its change list and new scan report as JSON and uses default reading estimates. `-dry-run` prints a repair plan without writing a book. `-fix-links=false`, `-fix-duplicate-ids=false`, `-fix-metadata=false`, and `-fix-document-markup=false` disable those categories. `-language TAG` supplies a confirmed language; `-generate-identifier`, `-normalize-entities`, and `-remove-scripts` explicitly select optional changes. `-expect-sha256 HASH` requires the source hash from a preview, rejecting a changed source file. Scan the repaired file with `-epubcheck` if you also want standards validation. The CLI does not modify the desktop's saved history or preferences.
+`scan` supports `-format text|json|csv`, `-recursive`, `-words-per-page` (100–1,000), `-reading-wpm` (80–1,000), `-epubcheck`, and `-java`. `repair` prints its change list and new scan report as JSON and uses default reading estimates. `-dry-run` prints a repair plan without writing a book. `-fix-links=false`, `-fix-duplicate-ids=false`, `-fix-metadata=false`, and `-fix-document-markup=false` disable those categories. `-language TAG` supplies a confirmed language; `-generate-identifier`, `-normalize-entities`, `-remove-scripts`, and `-replace-missing-scene-dividers` explicitly select optional changes. `-expect-sha256 HASH` requires the source hash from a preview, rejecting a changed source file. Scan the repaired file with `-epubcheck` if you also want standards validation. The CLI does not modify the desktop's saved history or preferences.
 
 Exit codes: **0** no errors detected, **1** book errors found, **2** usage/tool failure, **130** interrupted. Warnings alone do not produce exit code 1. Shell redirection creates or replaces the specified report file.
 
