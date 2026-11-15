@@ -1,6 +1,6 @@
 # Validation and repair behavior
 
-SpineGuard 1.4.2 performs local structural and integrity checks and provides a read-only EPUB preview. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
+SpineGuard 1.4.3 performs local structural and integrity checks and provides a read-only EPUB preview. Its native checker is useful before sideloading; the optional official EPUBCheck tool provides broader standards validation. Neither predicts every e-reader firmware or hardware failure.
 
 ## What the built-in engine checks
 
@@ -91,6 +91,8 @@ Supported actions are:
 9. Preserve other resources and their original compressed payloads, then rescan the output and show the change list and remaining findings. Content edits use source-byte patches instead of whole-document HTML serialization.
 
 An optional **Replace missing scene dividers** action handles a narrow missing-image case: a repeated missing local ornament is the sole content of a clearly identified scene-divider paragraph. It requires strictly editable declared XHTML, conservative ornament names and wrapper classes, and no meaningful image description, image identifier, link, or other ambiguous role. Proven path corrections take priority. A mixed eligible/substantive reference group is left unchanged. When selected, only eligible image spans become `* * *`; their wrapper styling, surrounding text, and archive resources are retained. The option is off by default and excluded from bulk defaults.
+
+Duplicate-ID checks inspect supported Adobe page templates (`application/vnd.adobe-page-template+xml` / `.xpgt`) separately from CSS. The supported subset contains passive Adobe/XSL-FO page layout and styling-rule selectors; selector dependencies use the existing per-identifier CSS checks. Missing templates, conflicting media information, ID-dependent selectors, and unsupported structures, attributes, namespaces, or expressions block editing as appropriate. The template itself is never rewritten by this inspection. Declared inspection resources are loaded within the normal archive/text limits, including resources with unfamiliar filename suffixes.
 
 SpineGuard does not guess a language, reconstruct missing content, or invent chapter navigation. New publication identity requires an explicit choice. It does not close broken tags, reconstruct truncated compressed data, simplify CSS, resize images, or convert EPUB to KEPUB. Scripts remain unless reader cleanup is selected. A successful repair may leave content or conformance errors to resolve.
 

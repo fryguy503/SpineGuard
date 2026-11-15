@@ -2,6 +2,15 @@
 
 Use this checklist for each version and record the exact build, operating system, architecture, and result. Passing tests, producing a package, signing it, publishing it, and accepting it on a physical reader are separate milestones.
 
+## 1.4.3 duplicate IDs with Adobe page templates
+
+- Present Adobe XPGT page templates are loaded and inspected separately from CSS. A bounded subset of passive page layout and simple selectors supplies the existing per-ID dependency checks; templates are never rewritten by inspection. Unknown features, missing resources, external dependencies, and ambiguous declarations still prevent unsafe changes.
+- Independent duplicate IDs use the existing **Fix book structure** action. The first destination and all page-break elements, classes, text, template files, metadata, and font resources are preserved. Styling that depends on a duplicate ID still prevents that ID's repair.
+- A private representative EPUB test renamed 44 later IDs across 22 documents, clearing all 44 native warnings. All 107,136 words, 25 reading-order documents, four font payloads, and 17 unrelated compressed resources were preserved; the original file was unchanged. EPUBCheck 5.4.0 changed from duplicate-ID errors to a passing result, with no new findings.
+- Synthetic fixtures cover enabled/disabled repair, exact source edits, per-ID selector dependencies, media-declared resources with unfamiliar suffixes, 34 unsupported-template cases, missing/conflicting stylesheets, imports, source preservation, size limits, and cancellation. Go tests, `go vet`, all 62 browser checks, and the local Windows app/CLI/portable/installer build pass.
+- Five native Windows Wails checks verify repair eligibility, the actual Go preview, default selection, disabling/re-enabling the repair, source-hash binding, and original preservation using an isolated synthetic EPUB. No external requests or page/console errors occurred; test-only debugging instrumentation is excluded from production builds.
+- Record the final native desktop and platform CI results for the release revision in `BUILD-INFO.txt`. Windows publisher signing, Mac notarization, interactive Mac testing, and physical-reader acceptance remain separate checks.
+
 ## 1.4.0 built-in reader
 
 - Added an offline, read-only EPUB reader using the vendored EPUB.js 0.3.93 browser renderer, including page/scroll reading, contents, document navigation, search, reading controls, saved position, and bookmarks.

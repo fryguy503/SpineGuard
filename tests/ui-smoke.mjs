@@ -179,7 +179,7 @@ async function openApp(t, config = {}, viewport = { width: 1440, height: 1000 })
     window.spineguardPreview = {
       async GetState() {
         invoke('GetState');
-        return { version: '1.4.2', settings, reports, warning: config.startupWarning || '' };
+        return { version: '1.4.3', settings, reports, warning: config.startupWarning || '' };
       },
       async GetBookCover(path){
         invoke('GetBookCover',[path]);

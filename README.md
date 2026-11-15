@@ -4,7 +4,7 @@
 
 SpineGuard checks books before you sideload them, explains findings, and saves repaired copies when a supported fix is available. Books are processed on your computer. The desktop interface uses Go and Wails with the operating system's webview; a command-line tool uses the same checking engine.
 
-Version **1.4.2**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
+Version **1.4.3**. Native builds target Windows x64 and macOS on Intel and Apple Silicon. See the [release checklist](docs/RELEASE-CHECKLIST.md) for build evidence and the remaining platform and reader acceptance checks.
 
 ## Use the application
 
@@ -29,6 +29,8 @@ The repair review asks only for choices relevant to the selected book. For a mis
 **Advanced options** and **Technical details** stay collapsed unless you need them. Advanced options include individual repair categories and optional character normalization. Technical details contain file paths, the full proposed edits, and explanations for remaining findings. Changing a choice updates the preview automatically.
 
 When a repeated scene-divider image is genuinely missing, **Review repairs** can offer **Replace missing scene dividers**. This starts unchecked. Selecting it replaces eligible decorative image references with `* * *`, retaining their paragraph styling and surrounding text in a separate copy. The review shows the replacement count. Missing illustrations, meaningful image descriptions, and ambiguous references remain for manual attention. Bulk repair leaves this option off; use **Review individually** to choose it for a book.
+
+Version 1.4.3 recognizes supported Adobe XPGT page templates during duplicate-identifier dependency checks. Existing templates no longer appear unavailable merely because they use this format. When the template's layout and selectors can be safely inspected, independent duplicate IDs can use the normal **Fix book structure** repair. ID-dependent selectors and unsupported template features still require manual review. Templates, fonts, and book text are preserved.
 
 Version 1.3.1 also repairs obsolete Cover links in an EPUB 2 table of contents when the book explicitly identifies one matching cover page and that page displays its declared cover image. This uses the existing **Fix broken links** option, including in bulk repair. Missing chapters and ambiguous destinations remain flagged for manual attention.
 

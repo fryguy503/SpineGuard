@@ -64,10 +64,28 @@ func (r contextReader) Read(p []byte) (int, error) {
 
 func textResource(name string) bool {
 	switch strings.ToLower(path.Ext(name)) {
-	case ".xml", ".opf", ".xhtml", ".html", ".htm", ".ncx", ".svg", ".css":
+	case ".xml", ".opf", ".xhtml", ".html", ".htm", ".ncx", ".svg", ".css", ".xpgt":
 		return true
 	}
 	return false
+}
+
+const pageTemplateMediaType = "application/vnd.adobe-page-template+xml"
+
+func normalizedRepairMedia(value string) string {
+	return strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+}
+
+func inspectableTextMedia(value string) bool {
+	switch normalizedRepairMedia(value) {
+	case "application/xhtml+xml", "image/svg+xml", "application/x-dtbncx+xml", "text/css", pageTemplateMediaType:
+		return true
+	}
+	return false
+}
+
+func isRepairPageTemplate(name, media string) bool {
+	return normalizedRepairMedia(media) == pageTemplateMediaType || strings.EqualFold(path.Ext(name), ".xpgt")
 }
 
 func openArchive(ctx context.Context, filename string, r *Report) (*archive, error) {

@@ -72,7 +72,7 @@ func loadDeclaredRepairText(a *archive) {
 			continue
 		}
 		for _, item := range pkg.Manifest {
-			if item.MediaType != "application/xhtml+xml" && item.MediaType != "image/svg+xml" && item.MediaType != "application/x-dtbncx+xml" && item.MediaType != "text/css" {
+			if !inspectableTextMedia(item.MediaType) {
 				continue
 			}
 			name, _, external, err := resolveReference(root.FullPath, item.Href)
@@ -107,6 +107,7 @@ func collectRepairEdits(ctx context.Context, a *archive, choices RepairOptions) 
 	for name, b := range a.text {
 		working[name] = b
 	}
+	declaredMedia := buildRepairResourceCatalog(ctx, working, nil).media
 	editable := func(name string) bool {
 		return !a.obfuscated || (!packages[name] && !strings.HasSuffix(strings.ToLower(name), ".opf") && name != "META-INF/encryption.xml")
 	}
@@ -115,7 +116,7 @@ func collectRepairEdits(ctx context.Context, a *archive, choices RepairOptions) 
 			break
 		}
 		b := working[name]
-		if name == "mimetype" || strings.HasSuffix(strings.ToLower(name), ".css") || !editable(name) {
+		if name == "mimetype" || strings.HasSuffix(strings.ToLower(name), ".css") || isRepairPageTemplate(name, declaredMedia[name]) || !editable(name) {
 			continue
 		}
 		if fixed, ok := sanitizeXML(b); ok {

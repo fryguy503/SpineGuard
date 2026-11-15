@@ -117,7 +117,20 @@ func planCleanupDocuments(ctx context.Context, text map[string][]byte, choices R
 		}
 		styleSeen[name] = true
 		if b, ok := text[name]; ok {
-			styleSources = append(styleSources, b)
+			if isRepairPageTemplate(name, declaredMedia[name]) {
+				if media, declared := declaredMedia[name]; declared && media != pageTemplateMediaType {
+					styleUnknown = "A page template has conflicting stylesheet media information."
+					return
+				}
+				css, err := repairPageTemplateStyles(ctx, b)
+				if err != nil {
+					styleUnknown = "An Adobe page template could not be safely inspected; identifier dependencies need manual review."
+					return
+				}
+				styleSources = append(styleSources, css)
+			} else {
+				styleSources = append(styleSources, b)
+			}
 		} else {
 			styleUnknown = "A referenced stylesheet is missing or could not be inspected."
 		}
@@ -131,6 +144,12 @@ func planCleanupDocuments(ctx context.Context, text map[string][]byte, choices R
 		}
 		src := text[name]
 		ext := strings.ToLower(path.Ext(name))
+		// Adobe templates are XML layout documents, not CSS or XHTML style
+		// elements. Inspect their selectors once and preserve the template bytes.
+		if isRepairPageTemplate(name, declaredMedia[name]) {
+			addStyle(name)
+			continue
+		}
 		if (ext == ".css" || declaredMedia[name] == "text/css") && len(bytes.TrimSpace(src)) > 0 {
 			addStyle(name)
 		}
@@ -170,8 +189,8 @@ func planCleanupDocuments(ctx context.Context, text map[string][]byte, choices R
 				href := repairAttribute(element, "href")
 				for _, at := range element.Attributes {
 					if at.Local == "media-type" {
-						media := strings.ToLower(at.Value)
-						if media == "text/css" {
+						media := normalizedRepairMedia(at.Value)
+						if media == "text/css" || media == pageTemplateMediaType {
 							target, fragment, external, err := resolveReference(name, href)
 							if err != nil || external || fragment != "" {
 								styleUnknown = "A stylesheet declaration requires external or unsupported resource resolution."

@@ -184,7 +184,7 @@ func Scan(ctx context.Context, filename string, opts Options) (report Report, er
 		}
 		targets[target] = item.ID
 		mediaTypes[target] = item.MediaType
-		if item.MediaType == "application/xhtml+xml" || item.MediaType == "image/svg+xml" || item.MediaType == "application/x-dtbncx+xml" || item.MediaType == "text/css" {
+		if inspectableTextMedia(item.MediaType) {
 			_, _ = a.cacheText(target)
 		}
 		if _, exists := a.files[target]; !exists {
